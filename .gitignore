@@ -35,6 +35,7 @@ state/
 # Environment variables
 .env
 .env.*
+.albedo.yaml
 
 # Internal / archived docs (not shipped publicly)
 docs/archived/
