@@ -61,6 +61,48 @@ worktree GC, and a daily archive of old Done issues.
 - A Linear workspace and a team you own
 - A GitHub repository albedo can push branches to and open PRs against
 
+## Linear setup (one-time, personal usage)
+
+Albedo treats Linear as the only source of truth, so a workspace must
+exist before the first run. The bare minimum for a single-user setup:
+
+1. **Workspace + team.** Sign up at
+   [linear.app](https://linear.app) (the Free plan is enough). Create
+   a team or reuse the default — note its **key** (e.g. `ORC`) or its
+   exact display name; this becomes `linear.team` in `config.yaml`.
+2. **Agent users.** Each worker authenticates as its own Linear user
+   so comment authorship and `@assignee` filtering are meaningful.
+   For personal usage:
+   - Easiest: 1 worker = your own Linear user. Skip the rest of this
+     step.
+   - Recommended: invite N extra users to the workspace (one per
+     worker — e.g. `albedo-coder@…`, `albedo-reviewer@…`). Free
+     workspaces allow several members; a throwaway Gmail alias
+     (`you+albedo1@gmail.com`) per agent works.
+3. **Personal API keys.** For *each* agent user, log in as that user →
+   **Settings → API → Personal API keys → New key**. Copy the token
+   into `$ALBEDO_HOME/.env`:
+   ```
+   LINEAR_API_KEY=lin_api_…           # default / single-worker setup
+   LINEAR_API_KEY_1=lin_api_…         # worker 1 (overrides default)
+   LINEAR_API_KEY_2=lin_api_…         # worker 2
+   ```
+   Workers look up `LINEAR_API_KEY_<id>` first, then fall back to
+   `LINEAR_API_KEY`, so a single shared key is fine to start with.
+4. **Project.** In the Linear UI: **Projects → New project**, attach
+   it to the team from step 1, and give it the **exact** name you'll
+   use in `.albedo.yaml` (`linear.project`). Albedo never creates
+   projects — the polling filter scopes everything by `project.id`,
+   so this lookup is mandatory.
+5. **Workflow states + labels.** *Skip this — handled automatically.*
+   The first `albedo run` (or `albedo setup`) idempotently creates
+   the seven required states (`Triage`, `Backlog`, `In Progress`,
+   `Review`, `Awaiting approval`, `Done`, `Canceled`) and the label
+   set (`stuck`, `kind:decomposition`, `attempts:1..3`, etc.) — see
+   `src/albedo/setup.py` for the full list.
+
+Once these four manual steps are done, follow **Quick start** below.
+
 ## Quick start
 
 Install once, `cd` into a target repo, run `albedo`. The first invocation
