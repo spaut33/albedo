@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# uv / venv
+.venv/
+.python-version
+uv.lock
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Project-specific runtime
+state/
+.worktrees/
+*.log
+
+# Environment variables
+.env
+.env.*
+
+# Internal / archived docs (not shipped publicly)
+docs/archived/
+
+# Sample target repo (lives alongside the source tree but isn't shipped)
+examples/sample-repo/
