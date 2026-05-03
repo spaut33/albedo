@@ -174,6 +174,49 @@ def test_queue_panel_lists_columns() -> None:
     assert '7' in text
 
 
+def test_queue_panel_rate_rows_have_no_ellipsis_at_narrow_widths() -> None:
+    queue = LinearQueueSnapshot(counts={'Backlog': 2, 'Done': 1})
+    panel = widgets.render_queue(
+        queue,
+        claims_history=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        done_history=[0, 1, 2, 3],
+    )
+    for width in (30, 40, 60, 100):
+        text = _capture(panel, width=width)
+        assert 'claims/min' in text
+        assert 'done/min' in text
+        # Rich's overflow ellipsis (single-char "…" or three dots) must not
+        # appear in any rate row — the sparkline should resize to fit.
+        assert '…' not in text
+        for line in text.splitlines():
+            if 'claims/min' in line or 'done/min' in line:
+                assert '...' not in line
+
+
+def test_queue_panel_rate_row_shrinks_to_zero_cells_when_extremely_narrow() -> None:
+    queue = LinearQueueSnapshot(counts={'Backlog': 1})
+    panel = widgets.render_queue(
+        queue,
+        claims_history=[1, 2, 3, 4, 5],
+    )
+    # Even at a width too narrow to fit any spark cells, render must not
+    # raise and must not insert an ellipsis.
+    text = _capture(panel, width=24)
+    assert '…' not in text
+    for line in text.splitlines():
+        if 'claims/min' in line:
+            assert '...' not in line
+
+
+def test_auto_sparkline_fills_console_max_width() -> None:
+    spark = widgets.AutoSparkline([1, 2, 3, 4, 5, 6, 7, 8])
+    for width in (4, 12, 30):
+        text = _capture(spark, width=width)
+        # _capture appends a trailing newline; the visible row must equal width.
+        line = text.splitlines()[0]
+        assert len(line) == width
+
+
 def test_sort_states_orders_known_states_first() -> None:
     counts = {
         'Done': 4,
@@ -216,7 +259,6 @@ def test_queue_panel_low_activity_rate_sparklines_have_no_red_cells() -> None:
             queue,
             claims_history=[0, 1, 2, 1, 0, 2, 1, 0],
             done_history=[0, 0, 1, 2, 0, 1, 2, 1],
-            spark_width=8,
         )
     )
     # ANSI red foreground is `\x1b[31m`; bright-red is `\x1b[91m`. Neither

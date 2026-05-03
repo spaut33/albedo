@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 
 from rich import box
 from rich.align import Align
-from rich.console import Group, RenderableType
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.table import Table
@@ -135,6 +135,37 @@ def sparkline(
         style = color if color is not None else _grade_color(ratio)
         text.append(SPARK_BLOCKS[idx], style=style)
     return text
+
+
+class AutoSparkline:
+    """Self-sizing sparkline that fills the column it's rendered into.
+
+    Reads `console.options.max_width` so the caller doesn't need to guess
+    a width. Anything from 0 cells upwards is fine — `sparkline` already
+    pads/downsamples to fit.
+    """
+
+    def __init__(
+        self,
+        values: Sequence[float],
+        *,
+        max_value: float | None = None,
+        color: str | None = None,
+    ) -> None:
+        self._values = list(values)
+        self._max_value = max_value
+        self._color = color
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        width = max(0, options.max_width)
+        yield sparkline(
+            self._values,
+            width=width,
+            max_value=self._max_value,
+            color=self._color,
+        )
 
 
 def bar_gauge(
@@ -578,7 +609,6 @@ def render_queue(
     *,
     claims_history: Sequence[int] | None = None,
     done_history: Sequence[int] | None = None,
-    spark_width: int = 24,
 ) -> RenderableType:
     body: RenderableType
     if not queue.counts:
@@ -591,9 +621,9 @@ def render_queue(
             table.add_row(Text(name, style='white'), Text(str(count), style='cyan'))
         children: list[RenderableType] = [table]
         if claims_history is not None and any(claims_history):
-            children.append(_rate_row('claims/min', claims_history, spark_width))
+            children.append(_rate_row('claims/min', claims_history))
         if done_history is not None and any(done_history):
-            children.append(_rate_row('done/min', done_history, spark_width))
+            children.append(_rate_row('done/min', done_history))
         body = Group(*children)
     if queue.updated_at <= 0:
         age = ''
@@ -603,7 +633,7 @@ def render_queue(
     return boxed(body, title=f'linear{age}')
 
 
-def _rate_row(label: str, values: Sequence[int], width: int) -> RenderableType:
+def _rate_row(label: str, values: Sequence[int]) -> RenderableType:
     grid = Table.grid(padding=(0, 1), expand=True)
     grid.add_column('label', width=12, style='dim')
     grid.add_column('spark', no_wrap=True, ratio=1)
@@ -611,7 +641,7 @@ def _rate_row(label: str, values: Sequence[int], width: int) -> RenderableType:
     last = values[-1] if values else 0
     grid.add_row(
         Text(label),
-        sparkline(list(values), width=width, max_value=None, color='cyan'),
+        AutoSparkline(values, color='cyan'),
         Text(str(last), style='cyan'),
     )
     return grid
@@ -858,6 +888,7 @@ def find_view(snapshot: AggregatedSnapshot, agent_id: str | None) -> WorkerView 
 
 
 __all__ = [
+    'AutoSparkline',
     'bar_gauge',
     'boxed',
     'find_view',
