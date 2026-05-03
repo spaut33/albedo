@@ -57,16 +57,15 @@ def _fake_manifest() -> RepoManifest:
 
 def _install_fakes(monkeypatch: pytest.MonkeyPatch, repo_root: Path) -> None:
     """Stub Linear lookup + manifest discovery so main() doesn't hit the network."""
-    monkeypatch.setattr(
-        cli,
-        'load_repo_manifest',
-        lambda _start: (repo_root, _fake_manifest()),
-    )
-    monkeypatch.setattr(
-        cli,
-        '_resolve_project_id',
-        lambda _file_config, _manifest: 'prj-uuid',
-    )
+
+    def _load_repo_manifest(_start: Path) -> tuple[Path, RepoManifest]:
+        return (repo_root, _fake_manifest())
+
+    def _resolve_project_id(_file_config: object, _manifest: object) -> str:
+        return 'prj-uuid'
+
+    monkeypatch.setattr(cli, 'load_repo_manifest', _load_repo_manifest)
+    monkeypatch.setattr(cli, '_resolve_project_id', _resolve_project_id)
 
 
 @dataclass

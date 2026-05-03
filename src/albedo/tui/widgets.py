@@ -551,7 +551,7 @@ PREFERRED_STATE_ORDER: tuple[str, ...] = (
 )
 
 
-def _sort_states(counts: dict[str, int]) -> list[tuple[str, int]]:
+def sort_states(counts: dict[str, int]) -> list[tuple[str, int]]:
     """Order workflow states top-to-bottom along the pipeline.
 
     Known states (PREFERRED_STATE_ORDER) come first in fixed order; any
@@ -578,7 +578,7 @@ def render_queue(
         table = Table.grid(padding=(0, 1), expand=True)
         table.add_column('column', ratio=1)
         table.add_column('count', justify='right', no_wrap=True, width=4)
-        for name, count in _sort_states(queue.counts):
+        for name, count in sort_states(queue.counts):
             table.add_row(Text(name, style='white'), Text(str(count), style='cyan'))
         children: list[RenderableType] = [table]
         if claims_history is not None and any(claims_history):

@@ -6,7 +6,7 @@ import multiprocessing as mp
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from albedo.config import (
     DispatchConfig,
@@ -19,14 +19,17 @@ from albedo.dispatch_messages import (
     CandidateMsg,
     ClaimedOk,
     ClaimLost,
+    DispatchQueue,
+    ResultQueue,
     TaskDone,
 )
-from albedo.linear_client import IncomingRelation, Issue
+from albedo.linear_client import IncomingRelation, Issue, LinearClient
 from albedo.poller import (
     SUPERVISOR_AGENT_ID,
     Poller,
     run_result_drain,
 )
+from albedo.usage import UsageLedger
 
 
 def _issue(
@@ -121,28 +124,28 @@ def _config(
 
 def _make_poller(
     *,
-    linear: Any,
+    linear: _FakeLinear,
     config: OrchestratorConfig,
     queue_size: int = 4,
     in_flight: dict[str, float] | None = None,
-    ledger: Any | None = None,
-) -> tuple[Poller, mp.Queue, dict[str, float]]:
-    dispatch_queue: mp.Queue = mp.Queue(maxsize=queue_size)
+    ledger: _FakeLedger | None = None,
+) -> tuple[Poller, DispatchQueue, dict[str, float]]:
+    dispatch_queue: DispatchQueue = mp.Queue(maxsize=queue_size)
     in_flight = in_flight if in_flight is not None else {}
     ledger = ledger if ledger is not None else _FakeLedger()
     poller = Poller(
-        linear=linear,
+        linear=cast(LinearClient, linear),
         config=config,
         team_id='team-1',
         dispatch_queue=dispatch_queue,
         in_flight=in_flight,
         in_flight_lock=threading.Lock(),
-        ledger=ledger,
+        ledger=cast(UsageLedger, ledger),
     )
     return poller, dispatch_queue, in_flight
 
 
-def _drain(q: mp.Queue, *, settle_seconds: float = 0.05) -> list[Any]:
+def _drain(q: DispatchQueue, *, settle_seconds: float = 0.05) -> list[Any]:
     """Drain an `mp.Queue` after letting its feeder thread settle.
 
     `mp.Queue.put_nowait` enqueues to a feeder; `empty()` can briefly lie
@@ -269,7 +272,7 @@ def test_tick_publishes_queue_snapshot_under_supervisor_id(tmp_path: Path) -> No
 
 def test_run_result_drain_removes_id_on_task_done(tmp_path: Path) -> None:
     in_flight: dict[str, float] = {'a': time.time(), 'b': time.time()}
-    rq: mp.Queue = mp.Queue()
+    rq: ResultQueue = mp.Queue()
     rq.put(TaskDone(issue_id='a'))
     rq.put(ClaimLost(issue_id='b'))
     rq.put(None)
@@ -287,7 +290,7 @@ def test_run_result_drain_removes_id_on_task_done(tmp_path: Path) -> None:
 def test_run_result_drain_refreshes_timestamp_on_claimed_ok(tmp_path: Path) -> None:
     original_ts = time.time() - 100.0
     in_flight: dict[str, float] = {'a': original_ts}
-    rq: mp.Queue = mp.Queue()
+    rq: ResultQueue = mp.Queue()
     rq.put(ClaimedOk(issue_id='a'))
     rq.put(None)
     stop = threading.Event()

@@ -28,6 +28,7 @@ from types import FrameType
 from albedo.comment_redispatch import TriageFn, redispatch_on_new_user_comments
 from albedo.comment_triage import triage_user_reply
 from albedo.config import OrchestratorConfig, load_github_pat, load_linear_api_key
+from albedo.dispatch_messages import DispatchQueue, ResultQueue
 from albedo.github_client import GithubClient
 from albedo.housekeeping import (
     archive_old_done_issues,
@@ -47,7 +48,7 @@ DEFAULT_ARCHIVE_INTERVAL_SECONDS = 24 * 60 * 60
 
 log = logging.getLogger(__name__)
 
-WorkerEntry = Callable[
+type WorkerEntry = Callable[
     [
         str,
         OrchestratorConfig,
@@ -55,8 +56,8 @@ WorkerEntry = Callable[
         Path | None,
         frozenset[str],
         bool,
-        mp.Queue,
-        mp.Queue,
+        DispatchQueue,
+        ResultQueue,
     ],
     None,
 ]
@@ -98,8 +99,8 @@ def supervise(
     bot_user_ids = _discover_bot_user_ids(options)
 
     queue_size = options.workers * options.config.dispatch.queue_size_per_worker
-    dispatch_queue: mp.Queue = mp.Queue(maxsize=queue_size)
-    result_queue: mp.Queue = mp.Queue()
+    dispatch_queue: DispatchQueue = mp.Queue(maxsize=queue_size)
+    result_queue: ResultQueue = mp.Queue()
     in_flight: dict[str, float] = {}
     in_flight_lock = threading.Lock()
 
@@ -506,7 +507,7 @@ def _wait_for_children(children: list[BaseProcess]) -> None:
 
 def _poller_loop(
     options: SupervisorOptions,
-    dispatch_queue: mp.Queue,
+    dispatch_queue: DispatchQueue,
     in_flight: dict[str, float],
     in_flight_lock: threading.Lock,
     stop: threading.Event,
@@ -544,8 +545,8 @@ def _default_worker_entry(
     mcp_config_path: Path | None,
     bot_user_ids: frozenset[str],
     silence_stderr: bool,
-    dispatch_queue: mp.Queue,
-    result_queue: mp.Queue,
+    dispatch_queue: DispatchQueue,
+    result_queue: ResultQueue,
 ) -> None:
     """Child-process entrypoint.
 

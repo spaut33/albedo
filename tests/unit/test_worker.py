@@ -19,6 +19,8 @@ from albedo.dispatch_messages import (
     CandidateMsg,
     ClaimedOk,
     ClaimLost,
+    DispatchQueue,
+    ResultQueue,
 )
 from albedo.linear_client import IncomingRelation, Issue, IssueUpdate
 from albedo.worker import (
@@ -318,8 +320,8 @@ def test_run_loop_consumes_candidate_runs_claude_and_posts_results(
     monkeypatch.setattr(worker_mod, 'try_claim', fake_try_claim)
     monkeypatch.setattr(worker_mod, 'spawn_claude', fake_spawn)
 
-    dispatch_queue: mp.Queue = mp.Queue()
-    result_queue: mp.Queue = mp.Queue()
+    dispatch_queue: DispatchQueue = mp.Queue()
+    result_queue: ResultQueue = mp.Queue()
     dispatch_queue.put(CandidateMsg(issue=issue, offered_at_unix=0.0))
     dispatch_queue.put(None)  # shutdown sentinel
 
@@ -364,10 +366,13 @@ def test_run_loop_posts_claim_lost_when_try_claim_returns_none(
         state_dir=tmp_path / 'state',
     )
 
-    monkeypatch.setattr(worker_mod, 'try_claim', lambda **_: None)
+    def _try_claim_returns_none(**_: object) -> None:
+        return None
 
-    dispatch_queue: mp.Queue = mp.Queue()
-    result_queue: mp.Queue = mp.Queue()
+    monkeypatch.setattr(worker_mod, 'try_claim', _try_claim_returns_none)
+
+    dispatch_queue: DispatchQueue = mp.Queue()
+    result_queue: ResultQueue = mp.Queue()
     dispatch_queue.put(CandidateMsg(issue=issue, offered_at_unix=0.0))
     dispatch_queue.put(None)
 

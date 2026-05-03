@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import multiprocessing as mp
 import os
 import re
 import signal
@@ -48,7 +47,9 @@ from albedo.dispatch import RoleSpec, UnknownColumnError, dispatch
 from albedo.dispatch_messages import (
     ClaimedOk,
     ClaimLost,
+    DispatchQueue,
     ResultMsg,
+    ResultQueue,
     TaskDone,
 )
 from albedo.heartbeat import heartbeat_path, touch_heartbeat
@@ -282,8 +283,8 @@ def run_loop(
     agent_user_id: str,
     prompts_dir: Path,
     mcp_config_path: Path | None,
-    dispatch_queue: mp.Queue,
-    result_queue: mp.Queue,
+    dispatch_queue: DispatchQueue,
+    result_queue: ResultQueue,
     github_pat: SecretStr | None = None,
     cli: str = 'claude',
     install_signal_handlers: bool = True,
@@ -371,7 +372,7 @@ def run_loop(
     log.info('worker agent-%s shutdown complete', agent_id)
 
 
-def _post_result(result_queue: mp.Queue, msg: ResultMsg) -> None:
+def _post_result(result_queue: ResultQueue, msg: ResultMsg) -> None:
     """Best-effort send to the supervisor's result queue.
 
     The supervisor drives `in_flight` from these messages, but the
