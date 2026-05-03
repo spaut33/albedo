@@ -387,6 +387,38 @@ def test_linear_base_url_empty_when_no_worker_has_url() -> None:
     assert widgets.linear_base_url(snap) == ''
 
 
+def test_linear_base_url_returns_fallback_when_no_worker_has_url() -> None:
+    snap = _make_snapshot([_make_worker('1', issue=None)])
+    assert (
+        widgets.linear_base_url(snap, fallback='https://linear.app/acme')
+        == 'https://linear.app/acme'
+    )
+
+
+def test_event_log_links_survive_all_workers_idle() -> None:
+    """All workers idle but events still reference past issues — links must
+    remain when the renderer is given a cached `linear_base_url`."""
+    events = [
+        LogEvent(ts=time.time(), agent='1', level='info', message='claimed AI-48'),
+        LogEvent(
+            ts=time.time(), agent='1', level='info', message='AI-48 -> In Progress'
+        ),
+    ]
+    snap = _make_snapshot([_make_worker('1', issue=None)], events=events)
+    raw = _capture_with_links(
+        build_layout(
+            snap,
+            width=120,
+            height=40,
+            focused_agent=None,
+            paused=False,
+            linear_base_url='https://linear.app/acme',
+        )
+    )
+    assert 'https://linear.app/acme/issue/AI-48' in raw
+    assert '\x1b]8;' in raw
+
+
 def test_show_warnings_filters_event_panel_to_errors() -> None:
     events = [
         LogEvent(ts=time.time(), agent='1', level='info', message='polling'),
