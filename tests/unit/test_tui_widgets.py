@@ -205,6 +205,28 @@ def test_sort_states_pushes_unknown_states_to_bottom_alphabetically() -> None:
     ]
 
 
+def test_queue_panel_low_activity_rate_sparklines_have_no_red_cells() -> None:
+    # AI-53: claims/min and done/min auto-normalise to the rolling peak,
+    # which previously painted any nonzero idle-session activity red. The
+    # rate rows must now render in a flat neutral hue; the red ANSI escape
+    # is only allowed for gauges with a real cap.
+    queue = LinearQueueSnapshot(counts={'Backlog': 3})
+    rendered = _capture_with_links(
+        widgets.render_queue(
+            queue,
+            claims_history=[0, 1, 2, 1, 0, 2, 1, 0],
+            done_history=[0, 0, 1, 2, 0, 1, 2, 1],
+            spark_width=8,
+        )
+    )
+    # ANSI red foreground is `\x1b[31m`; bright-red is `\x1b[91m`. Neither
+    # should appear once rate sparklines opt out of the gradient.
+    assert '\x1b[31m' not in rendered
+    assert '\x1b[91m' not in rendered
+    assert 'claims/min' in rendered
+    assert 'done/min' in rendered
+
+
 def test_queue_panel_renders_full_workflow_in_order() -> None:
     counts = {'Done': 1, 'Triage': 2, 'In Progress': 3, 'Backlog': 4}
     text = _capture(widgets.render_queue(LinearQueueSnapshot(counts=counts)))
