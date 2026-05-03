@@ -19,6 +19,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 
+from albedo.tui import widgets
 from albedo.tui.history import HistoryStore
 from albedo.tui.input import KEY_ESCAPE, KeyReader
 from albedo.tui.layout import build_layout
@@ -65,6 +66,11 @@ class TuiApp:
         self._tailer = LogTailer(ctx.log_dir)
         self._console = Console()
         self._history = HistoryStore()
+        # Workspace URL is constant for the session; cache the first one
+        # we see so event-log links keep rendering after every worker
+        # returns to polling and `linear_base_url` no longer finds a URL
+        # on any live worker status.
+        self._linear_base_url = ''
 
     def run(self) -> None:
         ctx = self._ctx
@@ -89,6 +95,9 @@ class TuiApp:
                     project_name=ctx.project_name,
                 )
                 self._history.tick(snapshot, ctx.ledger)  # type: ignore[arg-type]
+                self._linear_base_url = widgets.linear_base_url(
+                    snapshot, fallback=self._linear_base_url
+                )
                 size = self._console.size
                 shutdown = _call_bool(ctx.shutdown_in_progress)
                 renderable = build_layout(
@@ -107,6 +116,7 @@ class TuiApp:
                     token_cap=ctx.token_cap,
                     refresh_ms=REFRESH_MS,
                     shutdown_in_progress=shutdown,
+                    linear_base_url=self._linear_base_url,
                 )
                 live.update(renderable)
 

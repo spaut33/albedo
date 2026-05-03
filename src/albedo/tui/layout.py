@@ -46,6 +46,7 @@ def build_layout(
     session_cost_usd: float = 0.0,
     daily_cost_usd: float = 0.0,
     shutdown_in_progress: bool = False,
+    linear_base_url: str | None = None,
 ) -> RenderableType:
     is_drilldown = (
         focused_agent is not None
@@ -112,11 +113,16 @@ def build_layout(
             ]
         else:
             events_source = snapshot.events
+        base_url = (
+            widgets.linear_base_url(snapshot)
+            if linear_base_url is None
+            else linear_base_url
+        )
         events_panel = widgets.render_events(
             events_source,
             max_rows=max(3, height // 4),
             title='warnings' if show_warnings else 'events',
-            base_url=widgets.linear_base_url(snapshot),
+            base_url=base_url,
         )
         claims_history = list(history.queue_claims) if history is not None else None
         done_history = list(history.queue_done) if history is not None else None

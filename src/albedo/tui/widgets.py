@@ -497,13 +497,15 @@ def _linkify_message(message: str, base_url: str, base_style: str) -> Text:
     return text
 
 
-def linear_base_url(snapshot: AggregatedSnapshot) -> str:
+def linear_base_url(snapshot: AggregatedSnapshot, fallback: str = '') -> str:
     """Derive `https://linear.app/<workspace>` from any known issue URL.
 
     Linear issue URLs look like `https://linear.app/<workspace>/issue/<key>/<slug>`,
     so any worker that has picked up an issue gives us the workspace
     prefix to template links for identifiers we only see as plain text
-    (e.g. inside event log lines). Returns `''` when no URL is known.
+    (e.g. inside event log lines). Returns `fallback` when no URL is
+    found in the current snapshot — callers cache the last-known value
+    so links survive a transient "all workers idle" state.
     """
     for view in snapshot.workers:
         status = view.status
@@ -512,7 +514,7 @@ def linear_base_url(snapshot: AggregatedSnapshot) -> str:
         prefix, sep, _ = status.issue.url.partition('/issue/')
         if sep:
             return prefix
-    return ''
+    return fallback
 
 
 def render_events(
