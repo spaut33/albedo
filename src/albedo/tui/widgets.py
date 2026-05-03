@@ -100,15 +100,21 @@ def sparkline(
     *,
     width: int,
     max_value: float | None = None,
+    color: str | None = None,
 ) -> Text:
     """Render a Unicode-block sparkline of `values` into a `width`-wide Text.
 
     Output is always exactly `width` cells: shorter inputs are left-padded
     with blanks so the newest sample stays anchored to the right edge.
     Empty / all-zero input renders as `width` spaces. `max_value` is the
-    upper bound of the scale; if omitted, derived from `max(values)`. The
-    sparkline is colored per-cell using `_grade_color(cell/max)`, so a
-    rising series shifts from green through yellow to red.
+    upper bound of the scale; if omitted, derived from `max(values)`.
+
+    By default cells are colored per-sample via `_grade_color(cell/max)` —
+    a green→yellow→red gradient that signals proximity to a known cap.
+    Pass `color` to force a single flat style instead; use this for series
+    that convey shape over time without a meaningful ceiling (e.g. raw
+    rate counts), where the gradient would otherwise paint the rolling
+    peak red regardless of absolute magnitude.
     """
     if width <= 0:
         return Text('')
@@ -126,7 +132,8 @@ def sparkline(
             continue
         ratio = min(1.0, sample / peak)
         idx = min(len(SPARK_BLOCKS) - 1, max(0, int(ratio * (len(SPARK_BLOCKS) - 1))))
-        text.append(SPARK_BLOCKS[idx], style=_grade_color(ratio))
+        style = color if color is not None else _grade_color(ratio)
+        text.append(SPARK_BLOCKS[idx], style=style)
     return text
 
 
@@ -602,7 +609,7 @@ def _rate_row(label: str, values: Sequence[int], width: int) -> RenderableType:
     last = values[-1] if values else 0
     grid.add_row(
         Text(label),
-        sparkline(list(values), width=width, max_value=None),
+        sparkline(list(values), width=width, max_value=None, color='cyan'),
         Text(str(last), style='cyan'),
     )
     return grid

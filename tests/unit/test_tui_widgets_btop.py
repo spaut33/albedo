@@ -56,6 +56,27 @@ def test_sparkline_zero_peak_is_all_blanks() -> None:
     assert text.plain == '    '
 
 
+def test_sparkline_color_override_applies_flat_style_to_every_cell() -> None:
+    # The default per-cell gradient maps the rolling peak to red. Passing
+    # `color=` short-circuits that so callers rendering shape-over-time
+    # series (e.g. raw rate counts) don't get an alarmist colour scheme
+    # purely because of auto-normalisation.
+    text = widgets.sparkline([1, 2], width=2, color='cyan')
+    spans = [(span.start, span.end, span.style) for span in text.spans]
+    assert spans == [(0, 1, 'cyan'), (1, 2, 'cyan')]
+    assert all(style == 'cyan' for _, _, style in spans)
+
+
+def test_sparkline_low_activity_with_color_override_has_no_red_cells() -> None:
+    # Mirrors the linear-panel claims/min and done/min case from AI-53:
+    # values capped at 2 over the window must not render red even though
+    # the rolling peak hits the gradient's red threshold.
+    text = widgets.sparkline([0, 1, 2, 1, 0, 2, 1, 0], width=8, color='cyan')
+    styles = {span.style for span in text.spans}
+    assert 'red' not in styles
+    assert styles == {'cyan'}
+
+
 # --- bar_gauge -----------------------------------------------------------
 
 
