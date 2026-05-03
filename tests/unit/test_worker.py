@@ -737,6 +737,7 @@ def test_reviewer_approve_moves_to_awaiting_approval_and_adds_kind_final_pr(
     assert len(fake.updates) == 1
     _, update = fake.updates[0]
     assert getattr(update, 'state_id', None) == 'state-await'
+    assert getattr(update, 'unset_assignee', False) is True
     label_ids = getattr(update, 'label_ids', None)
     assert label_ids is not None
     assert 'lab-final' in label_ids
@@ -804,6 +805,7 @@ def test_reviewer_request_changes_escalates_at_max_attempts(
     assert 'attempts=3' in body
     _, update = fake.updates[0]
     assert getattr(update, 'state_id', None) == 'state-await'
+    assert getattr(update, 'unset_assignee', False) is True
     label_ids = getattr(update, 'label_ids', None)
     assert label_ids is not None
     assert 'lab-stuck' in label_ids
@@ -836,6 +838,7 @@ def test_reviewer_escalation_threshold_honours_config_override(
     assert 'attempts=1' in body
     _, update = fake.updates[0]
     assert getattr(update, 'state_id', None) == 'state-await'
+    assert getattr(update, 'unset_assignee', False) is True
     label_ids = getattr(update, 'label_ids', None)
     assert label_ids is not None
     assert 'lab-stuck' in label_ids

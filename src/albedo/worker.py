@@ -1116,7 +1116,8 @@ def _post_spawn_reviewer(
         if target is None:
             return None, False
         linear.update_issue(
-            issue.id, IssueUpdate(state_id=target, label_ids=new_labels)
+            issue.id,
+            IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
         )
         log.info('%s APPROVE -> %s', issue.identifier, role.target_state_on_success)
         return None, True
@@ -1137,7 +1138,8 @@ def _post_spawn_reviewer(
         if target is None:
             return None, False
         linear.update_issue(
-            issue.id, IssueUpdate(state_id=target, label_ids=new_labels)
+            issue.id,
+            IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
         )
         log.info(
             '%s REQUEST_CHANGES (attempts=%d) -> Awaiting approval (stuck)',
