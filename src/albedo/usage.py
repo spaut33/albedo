@@ -97,29 +97,48 @@ class UsageLedger:
         con.execute(
             'CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_records (ts_unix)'
         )
-        # v2: outcome / wallclock_sec / cost_usd / role columns. Added with
-        # `ADD COLUMN ... DEFAULT` so existing rows have sensible values.
-        existing = {
-            row[1] for row in con.execute('PRAGMA table_info(usage_records)').fetchall()
-        }
-        if 'outcome' not in existing:
-            con.execute(
-                "ALTER TABLE usage_records ADD COLUMN outcome TEXT NOT NULL DEFAULT ''"
-            )
-        if 'wallclock_sec' not in existing:
-            con.execute(
-                'ALTER TABLE usage_records '
-                'ADD COLUMN wallclock_sec INTEGER NOT NULL DEFAULT 0'
-            )
-        if 'cost_usd' not in existing:
-            con.execute(
-                'ALTER TABLE usage_records '
-                'ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0.0'
-            )
-        if 'role' not in existing:
-            con.execute(
-                "ALTER TABLE usage_records ADD COLUMN role TEXT NOT NULL DEFAULT ''"
-            )
+        # v2 migration is gated by BEGIN EXCLUSIVE so concurrent inits
+        # (supervisor + worker processes share one usage.db) serialize and only
+        # the first process runs ALTER TABLE. Without the lock all readers see
+        # `existing` without the new columns, then race on ADD COLUMN.
+        con.commit()
+        prev_isolation = con.isolation_level
+        con.isolation_level = None
+        try:
+            con.execute('BEGIN EXCLUSIVE')
+            try:
+                existing = {
+                    row[1]
+                    for row in con.execute(
+                        'PRAGMA table_info(usage_records)'
+                    ).fetchall()
+                }
+                if 'outcome' not in existing:
+                    con.execute(
+                        'ALTER TABLE usage_records '
+                        "ADD COLUMN outcome TEXT NOT NULL DEFAULT ''"
+                    )
+                if 'wallclock_sec' not in existing:
+                    con.execute(
+                        'ALTER TABLE usage_records '
+                        'ADD COLUMN wallclock_sec INTEGER NOT NULL DEFAULT 0'
+                    )
+                if 'cost_usd' not in existing:
+                    con.execute(
+                        'ALTER TABLE usage_records '
+                        'ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0.0'
+                    )
+                if 'role' not in existing:
+                    con.execute(
+                        'ALTER TABLE usage_records '
+                        "ADD COLUMN role TEXT NOT NULL DEFAULT ''"
+                    )
+                con.execute('COMMIT')
+            except:
+                con.execute('ROLLBACK')
+                raise
+        finally:
+            con.isolation_level = prev_isolation
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS usage_meta (
