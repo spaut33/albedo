@@ -183,7 +183,7 @@ def test_sort_states_orders_known_states_first() -> None:
         'Awaiting approval': 0,
         'Review': 5,
     }
-    ordered = widgets._sort_states(counts)
+    ordered = widgets.sort_states(counts)
     assert [name for name, _ in ordered] == [
         'Triage',
         'Backlog',
@@ -196,7 +196,7 @@ def test_sort_states_orders_known_states_first() -> None:
 
 def test_sort_states_pushes_unknown_states_to_bottom_alphabetically() -> None:
     counts = {'Custom Z': 1, 'Custom A': 2, 'Backlog': 3, 'Done': 4}
-    ordered = widgets._sort_states(counts)
+    ordered = widgets.sort_states(counts)
     assert [name for name, _ in ordered] == [
         'Backlog',
         'Done',

@@ -48,6 +48,22 @@ def test_log_tailer_handles_rotation(tmp_path: Path) -> None:
     assert any(ev.message == 'after-rotation' for ev in fresh)
 
 
+def test_log_tailer_handles_in_place_truncation(tmp_path: Path) -> None:
+    log_dir = tmp_path / 'logs'
+    path = _seed_log(
+        log_dir,
+        '1',
+        [{'event': 'pre-truncate', 'agent': '1'}, {'event': 'also-pre', 'agent': '1'}],
+    )
+    tailer = LogTailer(log_dir)
+    tailer.poll()  # noop, EOF seeded
+    # `copytruncate`-style rotation: same inode, content replaced and shorter.
+    with path.open('w', encoding='utf-8') as f:
+        f.write(json.dumps({'event': 'post-truncate', 'agent': '1'}) + '\n')
+    fresh = tailer.poll()
+    assert any(ev.message == 'post-truncate' for ev in fresh)
+
+
 def test_load_linear_queue_handles_missing(tmp_path: Path) -> None:
     snap = load_linear_queue(tmp_path)
     assert snap.counts == {}

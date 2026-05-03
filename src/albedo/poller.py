@@ -18,7 +18,6 @@ fallback drops stuck `in_flight` entries so the next tick can re-offer.
 from __future__ import annotations
 
 import logging
-import multiprocessing as mp
 import threading
 import time
 from queue import Empty, Full
@@ -27,8 +26,8 @@ from albedo.config import OrchestratorConfig
 from albedo.dispatch_messages import (
     CandidateMsg,
     ClaimedOk,
-    ClaimLost,
-    TaskDone,
+    DispatchQueue,
+    ResultQueue,
 )
 from albedo.linear_client import LinearClient
 from albedo.linear_queue_writer import publish_queue
@@ -66,7 +65,7 @@ class Poller:
         linear: LinearClient,
         config: OrchestratorConfig,
         team_id: str,
-        dispatch_queue: mp.Queue,
+        dispatch_queue: DispatchQueue,
         in_flight: dict[str, float],
         in_flight_lock: threading.Lock,
         ledger: UsageLedger,
@@ -180,7 +179,7 @@ class Poller:
 
 def run_result_drain(
     *,
-    result_queue: mp.Queue,
+    result_queue: ResultQueue,
     in_flight: dict[str, float],
     in_flight_lock: threading.Lock,
     stop: threading.Event,
@@ -207,10 +206,8 @@ def run_result_drain(
             if isinstance(msg, ClaimedOk):
                 if msg.issue_id in in_flight:
                     in_flight[msg.issue_id] = time.time()
-            elif isinstance(msg, (ClaimLost, TaskDone)):
-                in_flight.pop(msg.issue_id, None)
             else:
-                log.warning('result-drain: unknown message type %r', msg)
+                in_flight.pop(msg.issue_id, None)
 
 
 def run_poller(

@@ -9,6 +9,7 @@ dataclasses with primitive fields so they pickle cleanly across the
 
 from __future__ import annotations
 
+import multiprocessing as mp
 from dataclasses import dataclass
 
 from albedo.linear_client import Issue
@@ -39,4 +40,9 @@ class TaskDone:
     issue_id: str
 
 
-ResultMsg = ClaimedOk | ClaimLost | TaskDone
+type ResultMsg = ClaimedOk | ClaimLost | TaskDone
+
+# `None` is the supervisor → worker shutdown sentinel on the dispatch queue
+# and the worker → supervisor shutdown sentinel on the result queue.
+type DispatchQueue = mp.Queue[CandidateMsg | None]
+type ResultQueue = mp.Queue[ResultMsg | None]

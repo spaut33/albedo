@@ -15,7 +15,9 @@ in full each time.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -82,44 +84,81 @@ class AggregatedSnapshot:
 class LogTailer:
     """Streams new lines from rotating per-agent JSON log files.
 
-    Keeps a (inode, offset) marker per path. Rotation is detected by inode
-    change: the next read starts from byte 0. Lines with bad JSON are
-    dropped silently.
+    Holds an open read FD per path so the original inode stays pinned —
+    that way a subsequent `unlink + create` at the same path is forced to
+    allocate a fresh inode, and rotation is detectable by comparing the
+    held FD's inode to `path.stat().st_ino`. Without the open FD, the
+    kernel may recycle the inode number (observed on GitHub Actions
+    runners), making rotation invisible. Lines with bad JSON are dropped
+    silently.
     """
 
     def __init__(self, log_dir: Path, ring_size: int = EVENTS_RING_SIZE) -> None:
         self._log_dir = log_dir
-        self._offsets: dict[Path, tuple[int, int]] = {}
+        # path -> (open fd, inode of the file the fd points to)
+        self._handles: dict[Path, tuple[int, int]] = {}
         self._buffer: deque[LogEvent] = deque(maxlen=ring_size)
         # Seed with end-of-file so the TUI doesn't replay history on launch.
         for path in self._discover_paths():
+            self._open_handle(path, seek_end=True)
+
+    def _open_handle(self, path: Path, *, seek_end: bool) -> None:
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+        except OSError:
+            return
+        try:
+            ino = os.fstat(fd).st_ino
+        except OSError:
+            os.close(fd)
+            return
+        if seek_end:
             try:
-                stat = path.stat()
-            except FileNotFoundError:
-                continue
-            self._offsets[path] = (stat.st_ino, stat.st_size)
+                os.lseek(fd, 0, os.SEEK_END)
+            except OSError:
+                os.close(fd)
+                return
+        self._handles[path] = (fd, ino)
+
+    def _close_handle(self, path: Path) -> None:
+        handle = self._handles.pop(path, None)
+        if handle is not None:
+            with contextlib.suppress(OSError):
+                os.close(handle[0])
 
     def poll(self) -> list[LogEvent]:
         """Read new lines from every known log file. Returns appended events."""
         appended: list[LogEvent] = []
         for path in self._discover_paths():
             try:
-                stat = path.stat()
+                disk_ino = path.stat().st_ino
             except FileNotFoundError:
                 continue
-            inode, last_offset = self._offsets.get(path, (stat.st_ino, 0))
-            if inode != stat.st_ino:
-                last_offset = 0
-            if stat.st_size < last_offset:
-                last_offset = 0
+            handle = self._handles.get(path)
+            if handle is None or handle[1] != disk_ino:
+                # First sighting or rotation: drop the old fd, open the
+                # current file from byte 0.
+                self._close_handle(path)
+                self._open_handle(path, seek_end=False)
+                handle = self._handles.get(path)
+                if handle is None:
+                    continue
+            fd = handle[0]
             try:
-                with path.open('rb') as f:
-                    f.seek(last_offset)
-                    data = f.read()
-                    new_offset = f.tell()
+                stat = os.fstat(fd)
+                pos = os.lseek(fd, 0, os.SEEK_CUR)
+                if stat.st_size < pos:
+                    # In-place truncation — rewind and re-read from 0.
+                    os.lseek(fd, 0, os.SEEK_SET)
+                chunks: list[bytes] = []
+                while True:
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                data = b''.join(chunks)
             except OSError:
                 continue
-            self._offsets[path] = (stat.st_ino, new_offset)
             for raw in data.splitlines():
                 if not raw.strip():
                     continue
@@ -129,6 +168,14 @@ class LogTailer:
                 self._buffer.append(event)
                 appended.append(event)
         return appended
+
+    def close(self) -> None:
+        """Release all open file handles. Safe to call multiple times."""
+        for path in list(self._handles):
+            self._close_handle(path)
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort cleanup
+        self.close()
 
     def recent(self, n: int) -> list[LogEvent]:
         if n <= 0:

@@ -40,7 +40,7 @@ GITHUB_PAT_ENV = 'GITHUB_PERSONAL_ACCESS_TOKEN'
 PLACEHOLDER_SENTINEL = 'REPLACE_ME'
 
 
-def _reject_placeholder(value: str, *, field: str) -> str:
+def reject_placeholder(value: str, *, field: str) -> str:
     if value.strip() == PLACEHOLDER_SENTINEL:
         raise ValueError(
             f'{field} is still {PLACEHOLDER_SENTINEL!r} — edit '
@@ -69,7 +69,7 @@ class GithubConfig(BaseModel):
     @field_validator('owner', 'repo', mode='after')
     @classmethod
     def _no_placeholder(cls, value: str, info: Any) -> str:
-        return _reject_placeholder(value, field=f'repo.github.{info.field_name}')
+        return reject_placeholder(value, field=f'repo.github.{info.field_name}')
 
 
 class RepoConfig(BaseModel):
@@ -145,7 +145,7 @@ class LinearConfig(BaseModel):
     @field_validator('team', mode='after')
     @classmethod
     def _team_no_placeholder(cls, value: str) -> str:
-        return _reject_placeholder(value, field='linear.team')
+        return reject_placeholder(value, field='linear.team')
 
 
 class ModelsConfig(BaseModel):

@@ -15,6 +15,7 @@ import threading
 import time
 from collections import Counter
 from pathlib import Path
+from typing import cast
 
 from albedo.config import (
     DispatchConfig,
@@ -25,10 +26,13 @@ from albedo.config import (
 )
 from albedo.dispatch_messages import (
     ClaimedOk,
+    DispatchQueue,
+    ResultQueue,
     TaskDone,
 )
-from albedo.linear_client import Issue
+from albedo.linear_client import Issue, LinearClient
 from albedo.poller import Poller, run_result_drain
+from albedo.usage import UsageLedger
 
 
 def _issue(issue_id: str) -> Issue:
@@ -96,8 +100,8 @@ def _config(tmp_path: Path) -> OrchestratorConfig:
 def _consumer(
     *,
     name: str,
-    dispatch_queue: mp.Queue,
-    result_queue: mp.Queue,
+    dispatch_queue: DispatchQueue,
+    result_queue: ResultQueue,
     claimed_log: list[tuple[str, str]],
     log_lock: threading.Lock,
     stop: threading.Event,
@@ -128,21 +132,21 @@ def test_two_workers_consume_each_candidate_exactly_once(tmp_path: Path) -> None
     fake = _FakeLinear(pickup=issues)
     cfg = _config(tmp_path)
 
-    dispatch_queue: mp.Queue = mp.Queue(
+    dispatch_queue: DispatchQueue = mp.Queue(
         maxsize=cfg.workers * cfg.dispatch.queue_size_per_worker
     )
-    result_queue: mp.Queue = mp.Queue()
+    result_queue: ResultQueue = mp.Queue()
     in_flight: dict[str, float] = {}
     in_flight_lock = threading.Lock()
 
     poller = Poller(
-        linear=fake,
+        linear=cast(LinearClient, fake),
         config=cfg,
         team_id='team-1',
         dispatch_queue=dispatch_queue,
         in_flight=in_flight,
         in_flight_lock=in_flight_lock,
-        ledger=_FakeLedger(),
+        ledger=cast(UsageLedger, _FakeLedger()),
     )
 
     drain_stop = threading.Event()

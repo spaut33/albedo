@@ -22,7 +22,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-from albedo.config import GithubConfig, _reject_placeholder
+from albedo.config import GithubConfig, reject_placeholder
 
 MANIFEST_FILENAME = '.albedo.yaml'
 
@@ -46,7 +46,7 @@ class RepoManifestLinear(BaseModel):
     @field_validator('project', mode='after')
     @classmethod
     def _no_placeholder(cls, value: str) -> str:
-        return _reject_placeholder(value, field='linear.project')
+        return reject_placeholder(value, field='linear.project')
 
 
 class RepoManifest(BaseModel):
@@ -67,7 +67,7 @@ class RepoManifest(BaseModel):
     @field_validator('name', mode='after')
     @classmethod
     def _no_placeholder(cls, value: str) -> str:
-        return _reject_placeholder(value, field='name')
+        return reject_placeholder(value, field='name')
 
 
 class RepoManifestNotFoundError(RuntimeError):

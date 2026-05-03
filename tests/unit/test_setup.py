@@ -355,18 +355,17 @@ def test_main_runs_bootstrap_and_prints_summary(
         RepoManifestRepo,
     )
 
-    monkeypatch.setattr(
-        orchestrator_setup,
-        'load_repo_manifest',
-        lambda _start: (
+    def _load_repo_manifest(_start: Path) -> tuple[Path, RepoManifest]:
+        return (
             tmp_path,
             RepoManifest(
                 name='sample',
                 linear=RepoManifestLinear(project='Sample'),
                 repo=RepoManifestRepo(),
             ),
-        ),
-    )
+        )
+
+    monkeypatch.setattr(orchestrator_setup, 'load_repo_manifest', _load_repo_manifest)
 
     captured: dict[str, Any] = {}
 
