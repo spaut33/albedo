@@ -1,9 +1,10 @@
 """Minimal GitHub REST client for the orchestrator's housekeeping needs.
 
-Currently a single read-only method: `get_pull_request`. We do NOT use this
-client for opening PRs or posting reviews — that work happens inside
-`claude -p` through the GitHub MCP. The orchestrator only needs to *check*
-PR state to drive the merge → Done automation.
+Originally a single read-only PR check, the client now also exposes the
+workflow-run / job / log endpoints needed by AI-56's CI-redispatch flow.
+We still do NOT use this client for opening PRs or posting reviews —
+that work happens inside `claude -p` through the GitHub MCP. The
+orchestrator only needs to *check* state to drive automation.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from pydantic import SecretStr
@@ -28,6 +30,10 @@ class GithubError(RuntimeError):
     """Raised when GitHub returns a non-2xx response or other transport error."""
 
 
+class GithubNotFoundError(GithubError):
+    """Raised on a 404 — callers can catch this to skip missing resources."""
+
+
 @dataclass(frozen=True, slots=True)
 class PullRequest:
     owner: str
@@ -35,6 +41,31 @@ class PullRequest:
     number: int
     state: str  # 'open' | 'closed'
     merged: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowStep:
+    name: str
+    number: int
+    conclusion: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowRun:
+    id: int
+    name: str
+    status: str
+    conclusion: str | None
+    html_url: str
+    head_sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowJob:
+    id: int
+    name: str
+    conclusion: str | None
+    steps: tuple[WorkflowStep, ...]
 
 
 def parse_pr_url(url: str) -> tuple[str, str, int] | None:
@@ -97,12 +128,103 @@ class GithubClient:
         return login
 
     def get_pull_request(self, owner: str, repo: str, number: int) -> PullRequest:
-        """Return the PR's current state. Raises `GithubError` on HTTP failure."""
+        """Return the PR's current state.
+
+        Raises `GithubNotFoundError` when the PR is missing,
+        `GithubError` on any other failure.
+        """
         path = f'/repos/{owner}/{repo}/pulls/{number}'
+        not_found = f'PR {owner}/{repo}#{number} not found'
+        response = self._request('GET', path, not_found_message=not_found)
+        body = response.json()
+        return PullRequest(
+            owner=owner,
+            repo=repo,
+            number=number,
+            state=str(body.get('state', '')),
+            merged=bool(body.get('merged', False)),
+        )
+
+    def list_workflow_runs(
+        self, owner: str, repo: str, head_branch: str
+    ) -> list[WorkflowRun]:
+        """Return workflow runs scoped to `head_branch`, newest-first.
+
+        GitHub's `actions/runs` endpoint orders by `created_at desc` by
+        default, which matches the newest-first contract. Raises
+        `GithubNotFoundError` if the repo or branch query 404s, and
+        `GithubError` on other failures.
+        """
+        path = f'/repos/{owner}/{repo}/actions/runs'
+        not_found = f'Workflow runs for {owner}/{repo}@{head_branch} not found'
+        response = self._request(
+            'GET',
+            path,
+            params={'branch': head_branch},
+            not_found_message=not_found,
+        )
+        body = response.json()
+        raw_runs: list[dict[str, Any]] = body.get('workflow_runs') or []
+        return [_parse_workflow_run(run) for run in raw_runs]
+
+    def list_workflow_jobs(
+        self, owner: str, repo: str, run_id: int
+    ) -> list[WorkflowJob]:
+        """Return all jobs for a workflow run, including per-step details.
+
+        Raises `GithubNotFoundError` if the run is missing, and
+        `GithubError` on other failures.
+        """
+        path = f'/repos/{owner}/{repo}/actions/runs/{run_id}/jobs'
+        not_found = f'Workflow run {owner}/{repo}#{run_id} not found'
+        response = self._request('GET', path, not_found_message=not_found)
+        body = response.json()
+        raw_jobs: list[dict[str, Any]] = body.get('jobs') or []
+        return [_parse_workflow_job(job) for job in raw_jobs]
+
+    def get_job_logs(self, owner: str, repo: str, job_id: int) -> str:
+        """Return the raw log text for a workflow job.
+
+        GitHub responds with a 302 redirect to a presigned download URL;
+        we follow it transparently. Decodes as utf-8 with replacement so
+        a stray non-utf-8 byte never breaks the caller. Raises
+        `GithubNotFoundError` if the job has no logs (e.g. expired),
+        and `GithubError` on other failures.
+        """
+        path = f'/repos/{owner}/{repo}/actions/jobs/{job_id}/logs'
+        not_found = f'Logs for job {owner}/{repo}#{job_id} not found'
+        response = self._request(
+            'GET',
+            path,
+            not_found_message=not_found,
+            follow_redirects=True,
+        )
+        return response.content.decode('utf-8', errors='replace')
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        not_found_message: str,
+        params: dict[str, Any] | None = None,
+        follow_redirects: bool = False,
+    ) -> httpx.Response:
+        """Issue a request with bounded retry on transient errors.
+
+        Retries on transport errors and `RETRYABLE_STATUS` codes up to
+        `max_retries` times. 404 maps to `GithubNotFoundError`; other
+        4xx and exhausted retries map to `GithubError`.
+        """
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
             try:
-                response = self._client.get(path)
+                response = self._client.request(
+                    method,
+                    path,
+                    params=params,
+                    follow_redirects=follow_redirects,
+                )
             except httpx.HTTPError as exc:
                 last_error = exc
                 self._sleep(attempt)
@@ -114,22 +236,48 @@ class GithubClient:
                 self._sleep(attempt)
                 continue
             if response.status_code == 404:
-                raise GithubError(f'PR {owner}/{repo}#{number} not found')
+                raise GithubNotFoundError(not_found_message)
             if response.status_code >= 400:
                 raise GithubError(
                     f'GitHub HTTP {response.status_code}: {response.text}'
                 )
-            body = response.json()
-            return PullRequest(
-                owner=owner,
-                repo=repo,
-                number=number,
-                state=str(body.get('state', '')),
-                merged=bool(body.get('merged', False)),
-            )
+            return response
         raise GithubError(
             f'GitHub request failed after {self._max_retries} attempts: {last_error}'
         )
 
     def _sleep(self, attempt: int) -> None:
         time.sleep(self._backoff_seconds * (attempt + 1))
+
+
+def _parse_workflow_run(raw: dict[str, Any]) -> WorkflowRun:
+    conclusion = raw.get('conclusion')
+    return WorkflowRun(
+        id=int(raw.get('id', 0)),
+        name=str(raw.get('name', '')),
+        status=str(raw.get('status', '')),
+        conclusion=str(conclusion) if conclusion is not None else None,
+        html_url=str(raw.get('html_url', '')),
+        head_sha=str(raw.get('head_sha', '')),
+    )
+
+
+def _parse_workflow_job(raw: dict[str, Any]) -> WorkflowJob:
+    conclusion = raw.get('conclusion')
+    raw_steps: list[dict[str, Any]] = raw.get('steps') or []
+    steps = tuple(_parse_workflow_step(step) for step in raw_steps)
+    return WorkflowJob(
+        id=int(raw.get('id', 0)),
+        name=str(raw.get('name', '')),
+        conclusion=str(conclusion) if conclusion is not None else None,
+        steps=steps,
+    )
+
+
+def _parse_workflow_step(raw: dict[str, Any]) -> WorkflowStep:
+    conclusion = raw.get('conclusion')
+    return WorkflowStep(
+        name=str(raw.get('name', '')),
+        number=int(raw.get('number', 0)),
+        conclusion=str(conclusion) if conclusion is not None else None,
+    )
