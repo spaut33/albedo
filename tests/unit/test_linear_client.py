@@ -683,47 +683,6 @@ def test_list_comments_returns_comments_oldest_first() -> None:
     assert comments[-1].body == 'let us cancel this'
 
 
-def test_list_comments_carries_attachments_when_present() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
-        return _ok(
-            {
-                'issue': {
-                    'comments': {
-                        'nodes': [
-                            {
-                                'id': 'c1',
-                                'body': 'see attached',
-                                'createdAt': '2026-05-02T10:00:00.000Z',
-                                'user': {'id': 'u1'},
-                                'attachments': {
-                                    'nodes': [
-                                        {
-                                            'id': 'att-1',
-                                            'url': 'https://uploads.linear.app/foo/spec.pdf',
-                                            'title': 'spec',
-                                            'subtitle': 'v2',
-                                        }
-                                    ]
-                                },
-                            }
-                        ]
-                    }
-                }
-            }
-        )
-
-    with _make_client(handler) as client:
-        comments = client.list_comments('AI-47')
-    assert comments[0].attachments == (
-        RawAttachment(
-            id='att-1',
-            url='https://uploads.linear.app/foo/spec.pdf',
-            title='spec',
-            subtitle='v2',
-        ),
-    )
-
-
 def test_list_comments_raises_when_issue_missing() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return _ok({'issue': None})

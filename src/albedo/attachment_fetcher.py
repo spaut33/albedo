@@ -1,7 +1,8 @@
 """Download Linear-side attachments into the worktree for the agent.
 
 Two sources are covered:
-  * Linear's Attachments API (issue.attachments / comment.attachments).
+  * Linear's Attachments API (issue-level only — Linear's Comment type
+    has no attachments relation).
   * Markdown-embedded `https://uploads.linear.app/...` URLs in the issue
     description and comment bodies — drag-and-dropped images, mostly.
 
@@ -79,10 +80,9 @@ def discover_attachments(
     """Collect all candidate attachments from an issue + its comments.
 
     Order is stable so log output and prompt rendering are deterministic:
-    issue-level Attachment-API entries first, then per-comment Attachment
-    entries (chronological), then markdown-embedded `uploads.linear.app`
-    URLs (description first, then comments). Duplicates by URL are
-    dropped — the first occurrence wins.
+    issue-level Attachment-API entries first, then markdown-embedded
+    `uploads.linear.app` URLs (description first, then comments).
+    Duplicates by URL are dropped — the first occurrence wins.
     """
     items: list[LinearAttachment] = []
     seen: set[str] = set()
@@ -99,14 +99,6 @@ def discover_attachments(
         candidate = _from_raw(raw, origin='attachment', origin_detail='issue')
         if candidate is not None:
             _push(candidate)
-
-    for comment in comments:
-        for raw in comment.attachments:
-            candidate = _from_raw(
-                raw, origin='comment', origin_detail=f'comment:{comment.id}'
-            )
-            if candidate is not None:
-                _push(candidate)
 
     for url in _embedded_urls(issue.description):
         candidate = _from_embedded(url, origin='description', origin_detail='issue')

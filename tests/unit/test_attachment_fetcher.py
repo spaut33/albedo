@@ -48,7 +48,6 @@ def _issue(
 def _comment(
     *,
     body: str = '',
-    attachments: tuple[RawAttachment, ...] = (),
     cid: str = 'c1',
 ) -> Comment:
     return Comment(
@@ -56,7 +55,6 @@ def _comment(
         body=body,
         author_id='u1',
         created_at='2026-05-02T10:00:00.000Z',
-        attachments=attachments,
     )
 
 
@@ -94,36 +92,25 @@ def _binary(content: bytes, *, ctype: str = 'image/png') -> httpx.Response:
 # ---------- discover_attachments ----------
 
 
-def test_discover_collects_from_all_four_sources_in_stable_order() -> None:
+def test_discover_collects_from_all_three_sources_in_stable_order() -> None:
     issue_att = RawAttachment(
         id='att-issue',
         url='https://uploads.linear.app/issue/mock.png',
         title='mock',
     )
-    comment_att = RawAttachment(
-        id='att-comment',
-        url='https://uploads.linear.app/comment/spec.pdf',
-        title='spec',
-    )
     issue = _issue(
         description='see ![inline](https://uploads.linear.app/desc/diag.png)',
         attachments=(issue_att,),
     )
-    comments = [
-        _comment(
-            body='attached: https://uploads.linear.app/cbody/notes.md',
-            attachments=(comment_att,),
-        )
-    ]
+    comments = [_comment(body='attached: https://uploads.linear.app/cbody/notes.md')]
     result = discover_attachments(issue, comments)
     assert [item.url for item in result] == [
         issue_att.url,
-        comment_att.url,
         'https://uploads.linear.app/desc/diag.png',
         'https://uploads.linear.app/cbody/notes.md',
     ]
     origins = [item.origin for item in result]
-    assert origins == ['attachment', 'comment', 'description', 'comment']
+    assert origins == ['attachment', 'description', 'comment']
 
 
 def test_discover_dedupes_by_url() -> None:
