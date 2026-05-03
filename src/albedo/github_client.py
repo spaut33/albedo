@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import SecretStr
@@ -41,6 +41,7 @@ class PullRequest:
     number: int
     state: str  # 'open' | 'closed'
     merged: bool
+    head_branch: str = ''
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +146,28 @@ class GithubClient:
             merged=bool(body.get('merged', False)),
         )
 
+    def list_pull_requests(
+        self, owner: str, repo: str, *, state: str = 'open'
+    ) -> list[PullRequest]:
+        """Return PRs for the repo, scoped by `state` (default 'open').
+
+        The list endpoint omits the `merged` flag, so callers that need
+        merge status must follow up with `get_pull_request`. For our
+        CI-redispatch use case `state='open'` is enough — closed/merged
+        PRs are simply absent from the cache and skipped.
+        """
+        path = f'/repos/{owner}/{repo}/pulls'
+        not_found = f'Pull requests for {owner}/{repo} not found'
+        response = self._request(
+            'GET',
+            path,
+            params={'state': state, 'per_page': 100},
+            not_found_message=not_found,
+        )
+        body = response.json()
+        raw_prs = cast('list[dict[str, Any]]', body if isinstance(body, list) else [])
+        return [_parse_pull_request(raw, owner, repo) for raw in raw_prs]
+
     def list_workflow_runs(
         self, owner: str, repo: str, head_branch: str
     ) -> list[WorkflowRun]:
@@ -248,6 +271,19 @@ class GithubClient:
 
     def _sleep(self, attempt: int) -> None:
         time.sleep(self._backoff_seconds * (attempt + 1))
+
+
+def _parse_pull_request(raw: dict[str, Any], owner: str, repo: str) -> PullRequest:
+    head_obj = cast('dict[str, Any]', raw.get('head') or {})
+    head_branch = str(head_obj.get('ref') or '')
+    return PullRequest(
+        owner=owner,
+        repo=repo,
+        number=int(raw.get('number', 0)),
+        state=str(raw.get('state', '')),
+        merged=bool(raw.get('merged', False)),
+        head_branch=head_branch,
+    )
 
 
 def _parse_workflow_run(raw: dict[str, Any]) -> WorkflowRun:
