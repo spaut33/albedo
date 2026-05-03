@@ -7,6 +7,7 @@ deterministic; real fork/spawn behaviour is exercised by the E2E run.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
@@ -72,9 +73,25 @@ def _dummy_entry(*_a: object) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_fake_process() -> None:  # pyright: ignore[reportUnusedFunction]
+def _reset_fake_process(  # pyright: ignore[reportUnusedFunction]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _FakeProcess.started = []
     _FakeProcess.joined = []
+
+    # The poller and housekeeping loops would otherwise spin up a real
+    # LinearClient against a non-existent team and raise from a daemon
+    # thread, surfacing as PytestUnhandledThreadExceptionWarning. Replace
+    # them with a minimal no-op that just blocks until the stop event fires
+    # so `thread.join()` returns promptly.
+    def _block_on_stop(*args: object, **_kw: object) -> None:
+        for arg in args:
+            if isinstance(arg, threading.Event):
+                arg.wait()
+                return
+
+    monkeypatch.setattr(sup, '_housekeeping_loop', _block_on_stop)
+    monkeypatch.setattr(sup, '_poller_loop', _block_on_stop)
 
 
 def _options(workers: int = 2, *, skip: bool = True) -> SupervisorOptions:

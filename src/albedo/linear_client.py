@@ -186,7 +186,6 @@ class Comment:
     body: str
     author_id: str | None
     created_at: str = ''
-    attachments: tuple[RawAttachment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -751,7 +750,6 @@ class LinearClient:
                     body
                     createdAt
                     user { id }
-                    attachments { nodes { id url title subtitle } }
                   }
                 }
               }
@@ -767,7 +765,6 @@ class LinearClient:
                 body=c['body'],
                 author_id=_nested_id(c.get('user')),
                 created_at=c.get('createdAt') or '',
-                attachments=_attachments_from_node(c),
             )
             for c in node['comments']['nodes']
         ]
