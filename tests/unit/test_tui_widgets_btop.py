@@ -36,10 +36,10 @@ def test_sparkline_zero_width_returns_empty() -> None:
 def test_sparkline_picks_block_glyphs_by_magnitude() -> None:
     text = widgets.sparkline([0, 1, 2, 3, 4, 5, 6, 7], width=8, max_value=7)
     # Zero → blank; the ladder is mapped via floor(ratio * 7), so the
-    # peak (7/7) lands on '█'. Intermediate values quantise to the next
-    # block up the ladder.
+    # peak (7/7) lands on the topmost glyph. Intermediate values quantise
+    # to the next glyph up the ladder.
     assert text.plain[0] == ' '
-    assert text.plain[-1] == '█'
+    assert text.plain[-1] == widgets.SPARK_BLOCKS[-1]
     # All intermediate cells must be one of the SPARK_BLOCKS glyphs.
     for ch in text.plain[1:]:
         assert ch in widgets.SPARK_BLOCKS
@@ -47,8 +47,8 @@ def test_sparkline_picks_block_glyphs_by_magnitude() -> None:
 
 def test_sparkline_downsamples_when_input_longer_than_width() -> None:
     text = widgets.sparkline([0, 0, 8, 8], width=2, max_value=8)
-    # Two buckets → averages [0, 8] → blank + full block.
-    assert text.plain == ' █'
+    # Two buckets → averages [0, 8] → blank + full glyph.
+    assert text.plain == ' ' + widgets.SPARK_BLOCKS[-1]
 
 
 def test_sparkline_zero_peak_is_all_blanks() -> None:
