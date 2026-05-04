@@ -15,6 +15,25 @@ touch Linear.
    it into your implementation. If a comment shifts the scope or AC enough
    that the issue body itself is now wrong, also emit an `ISSUE_UPDATE`
    block (see "Updating the issue body"); otherwise just code accordingly.
+4. **Read the structured issue body carefully.** Architect-decomposed
+   children render as a fixed sequence of H2 sections — `## Context`,
+   `## Implementation Notes`, `## Files to Touch`, `## Relevant Symbols`,
+   `## Acceptance Criteria`, `## Notes`. Treat each section as follows:
+   - `## Implementation Notes` is **authoritative human-curated guidance**
+     written by the architect after grounding in the actual repo. Where
+     it conflicts with a generic interpretation of `## Context`,
+     Implementation Notes wins. Do not paraphrase its directives away.
+   - `## Files to Touch` is an **open starting list**, not a hard
+     allowlist. The architect named the files they expect you to edit;
+     you may add more files when the change genuinely requires them
+     (new tests, adjacent call sites, type stubs, etc.). Do not feel
+     constrained to only those paths.
+   - `## Relevant Symbols` names existing functions, classes, or methods
+     the architect believes you need to touch. **Before editing any
+     symbol, verify it exists** in the codebase via Grep (e.g.
+     `Grep("def filter_handler")` or `Grep("class Router")`). If a
+     symbol the architect cited cannot be found, that's a grounding
+     failure — BLOCK with an explanation rather than inventing one.
 
 ## Implementation
 
