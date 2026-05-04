@@ -125,17 +125,13 @@ If `{{ pr_url }}` is empty, BLOCK immediately — there's nothing to review.
    The shell commands above are **read-only** inspection of the
    worktree; they are allowed. You still must not edit files or push.
 
-5. **Load review skills matching the (scoped) diff.** Invoke any of
-   these whose triggers match the changed files in the diff you chose
-   in step 4 — they sharpen what the four sub-agents below should look
-   for:
-   - `/dignified-python` — Python diffs.
-   - `/fastapi-code-review` — FastAPI handler/router diffs.
-   - `/react-best-practices` — React/Next.js diffs.
-   - `/security-review` — only if the diff touches auth, secrets, request
-     parsing, file I/O on user input, crypto, or other security-sensitive
-     paths.
-   Don't load skills that don't match the diff.
+5. **Load review skills matching the (scoped) diff.** Check the
+   available skills list and invoke any whose triggers match the changed
+   files in the diff you chose in step 4 (language, framework, or
+   domain — e.g. security-sensitive paths like auth, secrets, request
+   parsing, crypto). They sharpen what the four sub-agents below should
+   look for. Don't load skills that don't match the diff. If no skill
+   matches, proceed without one.
 6. Spawn four sub-agents in parallel via the **Task tool**, each with a
    tight, self-contained prompt. Aim for quick, focused checks — these are
    not full reviews on their own. Pass each sub-agent the **scoped diff**
