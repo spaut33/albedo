@@ -563,6 +563,81 @@ def test_run_once_blocks_when_no_pr_url(
     assert 'lab-await-human' in label_ids
 
 
+def test_run_claimed_records_pause_and_releases_on_usage_limit(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When claude returns a usage-limit error the worker:
+
+    * persists a global pause window (so other workers stop dispatching),
+    * does NOT post the regular blocker comment / state move,
+    * tags the result with usage_limit_paused so the loop can release the
+      claim without burning an attempt.
+    """
+    _stub_spawn(
+        monkeypatch,
+        is_error=True,
+        result_text=(
+            "You've hit your limit · resets 7:40pm (Europe/Moscow)\nTry again later."
+        ),
+    )
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+
+    result = worker_mod.run_claimed(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue=fake._issue,  # type: ignore[attr-defined]
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        github_pat=None,
+        cli='claude',
+    )
+
+    assert result.usage_limit_paused is True
+    # No blocker state move, no attempts-label bump — only the audit comment.
+    assert fake.updates == []
+    assert len(fake.comments) == 1
+    _, body = fake.comments[0]
+    assert body.startswith('**agent-1**: paused until')
+    assert 'Europe/Moscow' in body
+
+    from albedo.usage_limit import is_paused
+
+    pause = is_paused(cfg.state_dir)
+    assert pause is not None
+    assert pause.tz_label == 'Europe/Moscow'
+
+
+def test_run_claimed_treats_unrelated_error_as_normal_blocker(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Errors that don't match the usage-limit pattern flow through the
+    existing blocker path — no pause, normal Linear update.
+    """
+    _stub_spawn(monkeypatch, is_error=True, result_text='unrelated boom')
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+
+    result = worker_mod.run_claimed(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue=fake._issue,  # type: ignore[attr-defined]
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        github_pat=None,
+        cli='claude',
+    )
+
+    assert result.usage_limit_paused is False
+    assert len(fake.updates) == 1  # the regular blocker state move
+
+    from albedo.usage_limit import is_paused
+
+    assert is_paused(cfg.state_dir) is None
+
+
 def test_run_once_blocks_when_claude_errors(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

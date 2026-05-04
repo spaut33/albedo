@@ -256,6 +256,30 @@ def test_tick_skips_when_throttled(tmp_path: Path) -> None:
     assert in_flight == {}
 
 
+def test_tick_skips_when_usage_limit_pause_active(tmp_path: Path) -> None:
+    from albedo.usage_limit import PauseState, pause_state_path, write_pause_state
+
+    fake = _FakeLinear(pickup=[_issue('a')])
+    cfg = _config(tmp_path)
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    write_pause_state(
+        pause_state_path(cfg.state_dir),
+        PauseState(
+            until_unix=time.time() + 600,
+            tz_label='UTC',
+            reason='claude usage limit',
+            set_at_unix=time.time(),
+        ),
+    )
+    poller, q, in_flight = _make_poller(linear=fake, config=cfg)
+
+    poller.tick()
+
+    assert fake.pickup_calls == 0
+    assert _drain(q) == []
+    assert in_flight == {}
+
+
 def test_tick_publishes_queue_snapshot_under_supervisor_id(tmp_path: Path) -> None:
     fake = _FakeLinear(pickup=[_issue('a')])
     poller, _q, _in_flight = _make_poller(linear=fake, config=_config(tmp_path))

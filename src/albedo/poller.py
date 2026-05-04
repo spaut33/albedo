@@ -32,6 +32,7 @@ from albedo.dispatch_messages import (
 from albedo.linear_client import LinearClient
 from albedo.linear_queue_writer import publish_queue
 from albedo.usage import UsageLedger
+from albedo.usage_limit import format_pause_summary, is_paused
 from albedo.worker import (
     EXCLUDE_LABELS,
     PICKUP_STATES,
@@ -42,6 +43,7 @@ log = logging.getLogger(__name__)
 
 SUPERVISOR_AGENT_ID = '_supervisor'
 THROTTLE_LOG_INTERVAL_SECONDS = 60.0
+PAUSE_LOG_INTERVAL_SECONDS = 60.0
 BACKOFF_FLOOR_SECONDS = 30
 BACKOFF_CEILING_SECONDS = 300
 
@@ -78,6 +80,7 @@ class Poller:
         self._in_flight_lock = in_flight_lock
         self._ledger = ledger
         self._last_throttle_log_at = 0.0
+        self._last_pause_log_at = 0.0
 
     def tick(self) -> None:
         """One discovery + fan-out cycle.
@@ -91,6 +94,9 @@ class Poller:
         """
         now = time.time()
         self._evict_stale_in_flight(now)
+
+        if self._is_paused(now):
+            return
 
         if self._is_throttled(now):
             return
@@ -161,6 +167,25 @@ class Poller:
                 len(stale),
                 int(ttl),
             )
+
+    def _is_paused(self, now: float) -> bool:
+        """Return True when a Claude usage-limit pause is active.
+
+        While paused, the poller emits no offers — workers stay idle on the
+        queue until the wall-clock catches up. Logs at most once per minute
+        so a multi-hour pause doesn't flood the log.
+        """
+        state = is_paused(self._config.state_dir, now_unix=now)
+        if state is None:
+            return False
+        if now - self._last_pause_log_at >= PAUSE_LOG_INTERVAL_SECONDS:
+            log.info(
+                'poll: %s; no offers this tick (%.0fs remaining)',
+                format_pause_summary(state),
+                max(0.0, state.until_unix - now),
+            )
+            self._last_pause_log_at = now
+        return True
 
     def _is_throttled(self, now: float) -> bool:
         if not self._ledger.should_throttle(
