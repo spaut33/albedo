@@ -189,7 +189,10 @@ def test_build_mcp_extra_env_prefers_process_env(
 ) -> None:
     monkeypatch.setenv('GITHUB_PERSONAL_ACCESS_TOKEN', 'ghp_from_shell')
     env = build_mcp_extra_env(SecretStr('ghp_from_dotenv'))
-    assert env == {'GITHUB_PERSONAL_ACCESS_TOKEN': 'ghp_from_shell'}
+    assert env == {
+        'GITHUB_PERSONAL_ACCESS_TOKEN': 'ghp_from_shell',
+        'GH_TOKEN': 'ghp_from_shell',
+    }
 
 
 def test_build_mcp_extra_env_falls_back_to_dotenv(
@@ -197,7 +200,10 @@ def test_build_mcp_extra_env_falls_back_to_dotenv(
 ) -> None:
     monkeypatch.delenv('GITHUB_PERSONAL_ACCESS_TOKEN', raising=False)
     env = build_mcp_extra_env(SecretStr('ghp_from_dotenv'))
-    assert env == {'GITHUB_PERSONAL_ACCESS_TOKEN': 'ghp_from_dotenv'}
+    assert env == {
+        'GITHUB_PERSONAL_ACCESS_TOKEN': 'ghp_from_dotenv',
+        'GH_TOKEN': 'ghp_from_dotenv',
+    }
 
 
 def test_build_mcp_extra_env_returns_empty_when_no_pat(

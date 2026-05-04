@@ -214,6 +214,11 @@ def build_mcp_extra_env(github_pat: SecretStr | None) -> dict[str, str]:
     Process env wins (developer may have exported a token), then we fall back
     to whatever was loaded from `.env`. Empty values are dropped so MCP
     servers don't see literal empty strings.
+
+    The PAT is also forwarded as `GH_TOKEN` so that any `gh` CLI invocation
+    inside the worktree (claude sometimes reaches for it instead of the
+    GitHub MCP) authenticates as the bot rather than the operator's local
+    `gh auth login` keyring identity.
     """
     forwarded: dict[str, str] = {}
     pat = os.environ.get('GITHUB_PERSONAL_ACCESS_TOKEN', '').strip()
@@ -221,6 +226,7 @@ def build_mcp_extra_env(github_pat: SecretStr | None) -> dict[str, str]:
         pat = github_pat.get_secret_value().strip()
     if pat:
         forwarded['GITHUB_PERSONAL_ACCESS_TOKEN'] = pat
+        forwarded['GH_TOKEN'] = pat
     return forwarded
 
 

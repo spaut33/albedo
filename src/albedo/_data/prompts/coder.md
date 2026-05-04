@@ -44,9 +44,12 @@ touch Linear.
 ## Wrap-up — push and PR
 
 1. `git push -u origin {{ branch }}`.
-2. PR handling:
+2. PR handling — **only via the GitHub MCP**, never via the `gh` CLI.
+   The MCP is configured to use the orchestrator's bot PAT; `gh` may
+   fall back to the operator's local keyring identity and open the PR
+   under the wrong account.
    - If a PR for `{{ branch }}` against `{{ base_branch }}` **already
-     exists** (use the GitHub MCP to check), do NOT open a new one. The
+     exists** (check via the GitHub MCP), do NOT open a new one. The
      freshly pushed commits have already updated it. Re-emit that
      existing PR's URL in the final response.
    - Otherwise open a new PR via the GitHub MCP:
