@@ -67,6 +67,11 @@ from albedo.status_writer import (
     StatusWriter,
 )
 from albedo.usage import UsageLedger, default_db_path
+from albedo.usage_limit import (
+    format_pause_summary,
+    parse_reset_time,
+    record_pause,
+)
 from albedo.worktree import WorktreeInfo, branch_for_issue, ensure_worktree
 
 log = logging.getLogger(__name__)
@@ -97,6 +102,7 @@ class RunOnceResult:
     claude: ClaudeRunResult
     pr_url: str | None = None
     linear_updated: bool = False
+    usage_limit_paused: bool = False
 
 
 def parse_pr_url(text: str) -> str | None:
@@ -489,6 +495,19 @@ def _handle_claim_and_run(
     status.set_phase(PHASE_CLEANUP)
     clear_claim_manifest(claim_manifest_path(config.state_dir, agent_id))
 
+    if run_once_result.usage_limit_paused:
+        if manifest is not None:
+            _restore_claimed_state(
+                linear=linear,
+                manifest=manifest,
+                state_dir=config.state_dir,
+                agent_id=agent_id,
+            )
+        release_claim_assignee(linear=linear, issue=claimed)
+        status.note(f'usage-limit pause; released {claimed.identifier}')
+        status.clear_issue()
+        return
+
     if run_once_result.claude.is_error:
         log.info(
             '%s blocked: %s',
@@ -678,6 +697,22 @@ def run_claimed(
     if status_writer is not None:
         status_writer.set_phase(PHASE_POST_SPAWN)
     del wallclock_sec, outcome  # already persisted; locals retained for clarity
+
+    if _record_usage_limit_pause(
+        config=config,
+        linear=linear,
+        issue=issue,
+        claude=claude,
+        agent_id=agent_id,
+    ):
+        return RunOnceResult(
+            issue=issue,
+            role=role,
+            worktree=worktree,
+            claude=claude,
+            usage_limit_paused=True,
+        )
+
     pr_url, linear_updated = _post_spawn_linear_update(
         linear=linear,
         issue=issue,
@@ -893,6 +928,55 @@ def _resolve_target_states(linear: LinearClient, issue: Issue) -> dict[str, str]
     data = linear.query(document, {'id': issue.identifier})
     nodes = data['issue']['team']['states']['nodes']
     return {n['name']: n['id'] for n in nodes}
+
+
+def _record_usage_limit_pause(
+    *,
+    config: OrchestratorConfig,
+    linear: LinearClient,
+    issue: Issue,
+    claude: ClaudeRunResult,
+    agent_id: str,
+) -> bool:
+    """Detect a Claude usage-limit error and persist the pause window.
+
+    Returns True when the run hit the upstream limit. The caller skips
+    the normal blocker handling so the in-flight issue can be released
+    without burning a claim attempt — once the supervisor's poller sees
+    the pause file expire, the same issue gets re-offered cleanly.
+    """
+    if not claude.is_error:
+        return False
+    info = parse_reset_time(claude.result_text or '')
+    if info is None:
+        return False
+    state = record_pause(
+        state_dir=config.state_dir,
+        info=info,
+        reason='claude usage limit',
+    )
+    summary = format_pause_summary(state)
+    log.warning(
+        'agent-%s detected claude usage limit on %s — %s',
+        agent_id,
+        issue.identifier,
+        summary,
+    )
+    prefix = f'**agent-{agent_id}**: '
+    body = (
+        f'{prefix}{summary}. Workers paused; claim released without '
+        f'incrementing attempts.'
+    )
+    try:
+        linear.add_comment(issue.id, body)
+    except Exception as exc:
+        log.warning(
+            'agent-%s failed to post usage-limit comment on %s: %s',
+            agent_id,
+            issue.identifier,
+            exc,
+        )
+    return True
 
 
 def _post_spawn_linear_update(

@@ -204,8 +204,12 @@ def _run_with_tui(
     def warnings_provider() -> str:
         msgs: list[str] = []
         from albedo.heartbeat import heartbeat_path, is_stale
+        from albedo.usage_limit import format_pause_summary, is_paused
 
         state_dir = options.config.state_dir
+        pause_state = is_paused(state_dir)
+        if pause_state is not None:
+            msgs.append(format_pause_summary(pause_state))
         for child in children:
             agent_id = child.name.removeprefix('agent-')
             stale = is_stale(heartbeat_path(state_dir, agent_id))
