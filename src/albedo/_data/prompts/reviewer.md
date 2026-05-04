@@ -24,9 +24,68 @@ If `{{ pr_url }}` is empty, BLOCK immediately — there's nothing to review.
    wrong thing. Use the feedback to expand the checks below.
 2. Read the PR via the GitHub MCP: title, body, current diff against
    `{{ base_branch }}`, CI status, and existing review comments.
-3. **Load review skills matching the diff.** Invoke any of these whose
-   triggers match the changed files — they sharpen what the four sub-agents
-   below should look for:
+3. **Detect a prior reviewer review on this PR.** Use the GitHub MCP to
+   list the PR's reviews (e.g. `mcp__github__get_pull_request_reviews`).
+   You are looking for a *prior reviewer pass*, not arbitrary human
+   reviews.
+
+   Heuristic — a review counts as a prior reviewer review when **all** of:
+   - `state` (or `event`) is `COMMENTED` (we always post `event: COMMENT`;
+     never `APPROVED` or `CHANGES_REQUESTED`); and
+   - the review's author login matches the GitHub identity that this
+     reviewer agent posts under (i.e. the same identity that opened the
+     PR — coder and reviewer share one identity, see "How to post the
+     GitHub review" below); and
+   - the review body either contains a line that exactly matches
+     `VERDICT: APPROVE`, `VERDICT: REQUEST_CHANGES`, or
+     `VERDICT: BLOCKED <reason>`, **or** otherwise matches the reviewer
+     body shape described in "Final response format" (a short verdict
+     paragraph followed by an optional findings list).
+
+   If multiple reviews qualify, pick the **most recent** one by
+   `submitted_at`. Capture its `commit_id` (the SHA the prior pass
+   reviewed) and the set of line-anchored sub-comments it left
+   (file path + line + body).
+
+   **Negative path.** If the MCP call to list reviews fails, returns an
+   error, or returns data you cannot parse (missing `state`, `commit_id`,
+   `submitted_at`, etc.), do **not** silently skip prior-review
+   detection. Instead, log a one-line note in your final response (e.g.
+   "prior-review detection failed: <short reason> — falling back to full
+   pass against `{{ base_branch }}`") and proceed as if no prior review
+   was found.
+
+4. **Choose the diff scope for the four-agent pass.**
+   - **No prior reviewer review found** (first-pass review, or negative
+     path above): scope = full diff against base, i.e.
+     `git diff {{ base_branch }}...HEAD` semantics — same as today's
+     behavior. This branch is additive; first-pass reviews are unchanged.
+   - **Prior reviewer review found** (call its `commit_id` `<sha>`):
+     - Run `git log <sha>..HEAD` in `{{ worktree_path }}` to enumerate
+       the commits added since the prior pass. If that range is empty
+       (no new commits since the prior review), there is nothing new
+       to review — re-emit the prior verdict (`VERDICT: APPROVE` if the
+       prior review approved, otherwise `VERDICT: REQUEST_CHANGES`)
+       with a one-line note that no commits were added since `<sha>`.
+     - Otherwise compute the new-commits diff with
+       `git diff <sha>..HEAD` in `{{ worktree_path }}`. **Scope the
+       four-agent pass below to this diff only** — do not re-do a fresh
+       pass over the full diff against `{{ base_branch }}`.
+     - Treat the prior review's line-anchored findings as **resolved**
+       unless the same `(file, line)` appears in the new-commits diff
+       (i.e. that line was re-touched in `<sha>..HEAD`). Never re-post
+       a line comment on a line that was not re-touched — a finding
+       the coder addressed elsewhere, or a finding the prior reviewer
+       was wrong about, must not be raised a second time on the
+       untouched line.
+
+   The shell commands above are **read-only** inspection of the
+   worktree; they are allowed. You still must not edit files or push.
+
+5. **Load review skills matching the (scoped) diff.** Invoke any of
+   these whose triggers match the changed files in the diff you chose
+   in step 4 — they sharpen what the four sub-agents below should look
+   for:
    - `/dignified-python` — Python diffs.
    - `/fastapi-code-review` — FastAPI handler/router diffs.
    - `/react-best-practices` — React/Next.js diffs.
@@ -34,12 +93,17 @@ If `{{ pr_url }}` is empty, BLOCK immediately — there's nothing to review.
      parsing, file I/O on user input, crypto, or other security-sensitive
      paths.
    Don't load skills that don't match the diff.
-4. Spawn four sub-agents in parallel via the **Task tool**, each with a
+6. Spawn four sub-agents in parallel via the **Task tool**, each with a
    tight, self-contained prompt. Aim for quick, focused checks — these are
-   not full reviews on their own.
+   not full reviews on their own. Pass each sub-agent the **scoped diff**
+   from step 4 (full-vs-base on first pass, or `<sha>..HEAD` when a prior
+   review exists). The four-agent structure is unchanged; only the scope
+   narrows.
    - **AC verification** — for each AC bullet, locate the implementing
      change in the diff. Quote `path:line` references. Mark each AC as
-     `MET | PARTIAL | MISSING`.
+     `MET | PARTIAL | MISSING`. On a follow-up pass, an AC bullet that
+     was already MET in the prior review and whose implementing lines
+     were not re-touched stays MET — do not demand re-evidence.
    - **Test quality** — do new tests actually exercise the new behaviour
      (assertions on outputs, not just imports)? Cover edge cases the AC
      implied?
@@ -48,7 +112,7 @@ If `{{ pr_url }}` is empty, BLOCK immediately — there's nothing to review.
    - **Style consistency** — does the diff match the style of 2–3 nearest
      existing files (naming, layout, imports, single-quote/line-length
      rules)?
-5. Synthesize the four reports into a single decision: `APPROVE` or
+7. Synthesize the four reports into a single decision: `APPROVE` or
    `REQUEST_CHANGES`.
 
 ## How to post the GitHub review
@@ -70,7 +134,9 @@ Therefore **always** post a single GitHub review with **`event: COMMENT`**:
   changes**. Each line comment should be actionable: "rename X to Y",
   "add a test that …", "this raises ZeroDivisionError before the guard",
   etc. Vague suggestions ("consider refactoring") do not belong in a
-  request-changes review.
+  request-changes review. On a follow-up pass (prior review detected in
+  step 3), only post line comments on lines that appear in the
+  `<sha>..HEAD` diff — never re-post on a line that was not re-touched.
 
 Use only the GitHub MCP for posting reviews. Do NOT push commits, do NOT
 edit files in the worktree. You are read-only on code.
