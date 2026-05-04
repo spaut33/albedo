@@ -1190,6 +1190,76 @@ def test_parse_decomposition_rejects_relevant_symbols_empty_list() -> None:
         worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
 
 
+def _spec(**overrides: object) -> worker_mod.ChildSpec:
+    base: dict[str, object] = {
+        'title': 'Add filter API',
+        'context': 'Implement /filter endpoint',
+        'implementation_notes': 'Add `filter_handler` in `src/api/filters.py`.',
+        'files_to_touch': ('src/api/filters.py',),
+        'relevant_symbols': ('filter_handler',),
+        'acceptance_criteria': ('Returns 200 on empty',),
+        'estimate': 2,
+        'depends_on': (),
+    }
+    base.update(overrides)
+    return worker_mod.ChildSpec(**base)  # type: ignore[arg-type]
+
+
+def test_format_child_description_emits_all_sections_in_order() -> None:
+    spec = _spec(
+        files_to_touch=('src/api/filters.py', 'src/api/router.py'),
+        relevant_symbols=('filter_handler', 'Router.register'),
+        acceptance_criteria=('Returns 200 on empty', 'Rejects invalid'),
+    )
+    rendered = worker_mod._format_child_description(  # pyright: ignore[reportPrivateUsage]
+        spec, parent_identifier='AI-50'
+    )
+    expected_headers = (
+        '## Context',
+        '## Implementation Notes',
+        '## Files to Touch',
+        '## Relevant Symbols',
+        '## Acceptance Criteria',
+        '## Notes',
+    )
+    positions = [rendered.index(h) for h in expected_headers]
+    assert positions == sorted(positions)
+    # Files / symbols / AC each render as bullet lists with the parent
+    # identifier preserved in the trailing Notes block.
+    assert '* `src/api/filters.py`' in rendered
+    assert '* `src/api/router.py`' in rendered
+    assert '* `filter_handler`' in rendered
+    assert '* `Router.register`' in rendered
+    assert '* Returns 200 on empty' in rendered
+    assert '* Rejects invalid' in rendered
+    assert 'Parent: AI-50.' in rendered
+
+
+@pytest.mark.parametrize(
+    ('field', 'value'),
+    [
+        ('context', ''),
+        ('context', '   '),
+        ('implementation_notes', ''),
+        ('files_to_touch', ()),
+        ('relevant_symbols', ()),
+        ('acceptance_criteria', ()),
+    ],
+)
+def test_format_child_description_rejects_empty_structured_field(
+    field: str, value: object
+) -> None:
+    """Defensive: parser already rejects empties, but the renderer must
+    not silently drop a section header if a malformed spec slips past
+    validation. Lock the contract down: empty -> ValueError.
+    """
+    spec = _spec(**{field: value})
+    with pytest.raises(ValueError, match=f'ChildSpec.{field} is empty'):
+        worker_mod._format_child_description(  # pyright: ignore[reportPrivateUsage]
+            spec, parent_identifier='AI-50'
+        )
+
+
 class _ArchitectFakeLinear(_FakeLinear):
     def __init__(self, issue: Issue) -> None:
         super().__init__(issue)
@@ -1350,6 +1420,36 @@ def test_architect_creates_children_and_moves_parent_to_awaiting_approval(
     body = fake.comments[-1][1]
     assert 'DECOMPOSITION (2 children)' in body
     assert 'AI-101' in body and 'AI-102' in body
+
+    # Each rendered child description must carry the full structured
+    # section sequence so CODER agents can consume them as a contract.
+    for child in fake.created_issues:
+        rendered = cast('str', child['description'])
+        for header in (
+            '## Context',
+            '## Implementation Notes',
+            '## Files to Touch',
+            '## Relevant Symbols',
+            '## Acceptance Criteria',
+            '## Notes',
+        ):
+            assert header in rendered, f'missing {header!r} in:\n{rendered}'
+        # Headers must appear in the documented order.
+        positions = [
+            rendered.index(h)
+            for h in (
+                '## Context',
+                '## Implementation Notes',
+                '## Files to Touch',
+                '## Relevant Symbols',
+                '## Acceptance Criteria',
+                '## Notes',
+            )
+        ]
+        assert positions == sorted(positions), (
+            f'section headers out of order: {positions} in:\n{rendered}'
+        )
+        assert 'Parent: AI-50.' in rendered
 
     _, update = fake.updates[0]
     assert getattr(update, 'state_id', None) == 'state-await'

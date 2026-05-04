@@ -1738,11 +1738,36 @@ def _post_spawn_architect(
 
 
 def _format_child_description(spec: ChildSpec, *, parent_identifier: str) -> str:
-    bullets = '\n'.join(f'* {ac}' for ac in spec.acceptance_criteria)
+    """Render a ChildSpec as a grounded contract for the CODER prefix.
+
+    The output is a fixed sequence of H2 sections: ``## Context``,
+    ``## Implementation Notes``, ``## Files to Touch``, ``## Relevant
+    Symbols``, ``## Acceptance Criteria``, ``## Notes``. Each section is
+    always emitted so the CODER prompt can rely on the headers being
+    present. Empty structured fields (which the parser already rejects)
+    raise rather than silently dropping the header — a missing section
+    would indicate a malformed spec slipping past validation.
+    """
+    if not spec.context.strip():
+        raise ValueError('ChildSpec.context is empty')
+    if not spec.implementation_notes.strip():
+        raise ValueError('ChildSpec.implementation_notes is empty')
+    if not spec.files_to_touch:
+        raise ValueError('ChildSpec.files_to_touch is empty')
+    if not spec.relevant_symbols:
+        raise ValueError('ChildSpec.relevant_symbols is empty')
+    if not spec.acceptance_criteria:
+        raise ValueError('ChildSpec.acceptance_criteria is empty')
+
+    files_block = '\n'.join(f'* `{path}`' for path in spec.files_to_touch)
+    symbols_block = '\n'.join(f'* `{name}`' for name in spec.relevant_symbols)
+    ac_block = '\n'.join(f'* {ac}' for ac in spec.acceptance_criteria)
     return (
-        f'{spec.context}\n\n'
-        f'## Acceptance Criteria\n\n'
-        f'{bullets}\n\n'
+        f'## Context\n\n{spec.context.strip()}\n\n'
+        f'## Implementation Notes\n\n{spec.implementation_notes.strip()}\n\n'
+        f'## Files to Touch\n\n{files_block}\n\n'
+        f'## Relevant Symbols\n\n{symbols_block}\n\n'
+        f'## Acceptance Criteria\n\n{ac_block}\n\n'
         f'## Notes\n\nParent: {parent_identifier}.\n'
     )
 
