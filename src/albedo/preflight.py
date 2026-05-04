@@ -23,6 +23,7 @@ from rich.table import Table
 from albedo.config import (
     OrchestratorFileConfig,
     default_config_path,
+    load_bot_identity,
     load_config,
     load_github_pat,
     load_linear_api_key,
@@ -256,6 +257,10 @@ def check_github_pat(
         return CheckResult(False, 'GitHub PAT rejected', hint=str(exc))
     except Exception as exc:
         return CheckResult(False, 'GitHub API call failed', hint=str(exc))
+    identity = load_bot_identity()
+    if identity is not None:
+        name, email = identity
+        return CheckResult(True, f'GitHub user={login} (commits as {name} <{email}>)')
     return CheckResult(True, f'GitHub user={login}')
 
 

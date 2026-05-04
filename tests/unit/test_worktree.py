@@ -115,6 +115,71 @@ def test_ensure_worktree_raises_on_invalid_base_branch(
         ensure_worktree(repo, wt_root, 'sample', 'AI-7', 'no-such-branch', fetch=False)
 
 
+def _local_git_config(worktree: Path, key: str) -> str | None:
+    result = subprocess.run(
+        ['git', '-C', str(worktree), 'config', '--local', '--get', key],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def test_ensure_worktree_stamps_bot_identity(repo: Path, tmp_path: Path) -> None:
+    wt_root = tmp_path / 'worktrees'
+    info = ensure_worktree(
+        repo,
+        wt_root,
+        'sample',
+        'AI-5',
+        'main',
+        bot_identity=('Albedo Bot', 'bot@example.com'),
+    )
+    assert _local_git_config(info.path, 'user.name') == 'Albedo Bot'
+    assert _local_git_config(info.path, 'user.email') == 'bot@example.com'
+
+
+def test_ensure_worktree_re_stamps_on_reuse(repo: Path, tmp_path: Path) -> None:
+    wt_root = tmp_path / 'worktrees'
+    first = ensure_worktree(
+        repo,
+        wt_root,
+        'sample',
+        'AI-5',
+        'main',
+        bot_identity=('Old Bot', 'old@example.com'),
+    )
+    second = ensure_worktree(
+        repo,
+        wt_root,
+        'sample',
+        'AI-5',
+        'main',
+        fetch=False,
+        bot_identity=('New Bot', 'new@example.com'),
+    )
+    assert first.path == second.path
+    assert _local_git_config(second.path, 'user.name') == 'New Bot'
+    assert _local_git_config(second.path, 'user.email') == 'new@example.com'
+
+
+def test_ensure_worktree_inherits_existing_config_when_no_identity(
+    repo: Path, tmp_path: Path
+) -> None:
+    wt_root = tmp_path / 'worktrees'
+    info = ensure_worktree(repo, wt_root, 'sample', 'AI-5', 'main')
+    # No bot_identity passed → we must not have overwritten the parent
+    # repo's user.email; the worktree continues to inherit it.
+    inherited = subprocess.run(
+        ['git', '-C', str(info.path), 'config', '--get', 'user.email'],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert inherited == 'test@example.com'
+
+
 def test_remove_worktree_deletes_path(repo: Path, tmp_path: Path) -> None:
     wt_root = tmp_path / 'worktrees'
     info = ensure_worktree(repo, wt_root, 'sample', 'AI-5', 'main')

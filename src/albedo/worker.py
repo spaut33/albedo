@@ -42,7 +42,7 @@ from albedo.comment_filter import (
     filter_user_comments,
     format_user_comments_block,
 )
-from albedo.config import OrchestratorConfig
+from albedo.config import OrchestratorConfig, load_bot_identity
 from albedo.dispatch import RoleSpec, UnknownColumnError, dispatch
 from albedo.dispatch_messages import (
     ClaimedOk,
@@ -560,6 +560,7 @@ def run_claimed(
         repo_name,
         issue.identifier,
         config.repo.base_branch,
+        bot_identity=load_bot_identity(agent_id=agent_id),
     )
     if status_writer is not None:
         status_writer.set_issue(
@@ -766,6 +767,7 @@ def run_once(
         issue.identifier,
         config.repo.base_branch,
         fetch=fetch,
+        bot_identity=load_bot_identity(agent_id=agent_id),
     )
 
     raw_comments: list[Comment] = []

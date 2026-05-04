@@ -43,6 +43,7 @@ def ensure_worktree(
     *,
     fetch: bool = True,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    bot_identity: tuple[str, str] | None = None,
 ) -> WorktreeInfo:
     """Create or reuse the worktree for a task.
 
@@ -51,6 +52,12 @@ def ensure_worktree(
     from a previous failed run), the branch is checked out into a fresh
     worktree without re-creating it. Otherwise the worktree is created with
     a brand-new branch off `origin/<base>`.
+
+    When `bot_identity=(name, email)` is provided, the worktree's local
+    `user.name`/`user.email` are stamped to those values so commits made
+    inside it are attributed to the bot rather than the operator's global
+    git config. Re-applied on every call so a config change takes effect on
+    the next task without manual cleanup of existing worktrees.
 
     Raises `WorktreeError` if git refuses (path occupied by something else,
     fetch fails, etc.).
@@ -65,6 +72,7 @@ def ensure_worktree(
                 f'Worktree at {target} is on branch {existing_branch!r}, '
                 f'expected {branch!r}'
             )
+        _apply_bot_identity(target, bot_identity, timeout_seconds=timeout_seconds)
         return WorktreeInfo(path=target, branch=branch, base_branch=base_branch)
 
     # Drop dangling worktree refs (e.g. dir was deleted manually) so the next
@@ -95,7 +103,26 @@ def ensure_worktree(
             ],
             timeout_seconds=timeout_seconds,
         )
+    _apply_bot_identity(target, bot_identity, timeout_seconds=timeout_seconds)
     return WorktreeInfo(path=target, branch=branch, base_branch=base_branch)
+
+
+def _apply_bot_identity(
+    target: Path,
+    identity: tuple[str, str] | None,
+    *,
+    timeout_seconds: int,
+) -> None:
+    """Stamp `user.name`/`user.email` into the worktree's local git config.
+
+    No-op when `identity is None` — the worktree falls through to the
+    operator's global git config (the legacy behaviour).
+    """
+    if identity is None:
+        return
+    name, email = identity
+    _run_git(target, ['config', 'user.name', name], timeout_seconds=timeout_seconds)
+    _run_git(target, ['config', 'user.email', email], timeout_seconds=timeout_seconds)
 
 
 def _branch_exists(repo_path: Path, branch: str, *, timeout_seconds: int) -> bool:

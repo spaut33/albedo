@@ -8,12 +8,15 @@ import pytest
 from pydantic import ValidationError
 
 from albedo.config import (
+    GITHUB_BOT_EMAIL_ENV,
+    GITHUB_BOT_NAME_ENV,
     GITHUB_PAT_ENV,
     LINEAR_API_KEY_ENV,
     LinearConfig,
     OrchestratorFileConfig,
     UsageConfig,
     default_config_path,
+    load_bot_identity,
     load_config,
     load_github_pat,
     load_linear_api_key,
@@ -35,6 +38,8 @@ def _isolate_secrets_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     monkeypatch.setenv('ALBEDO_HOME', str(tmp_path))
     monkeypatch.delenv(LINEAR_API_KEY_ENV, raising=False)
     monkeypatch.delenv(GITHUB_PAT_ENV, raising=False)
+    monkeypatch.delenv(GITHUB_BOT_NAME_ENV, raising=False)
+    monkeypatch.delenv(GITHUB_BOT_EMAIL_ENV, raising=False)
 
 
 def _make_manifest(name: str = 'sample', project: str = 'Sample') -> RepoManifest:
@@ -375,3 +380,126 @@ def test_load_github_pat_reads_dotenv(tmp_path: Path) -> None:
     secret = load_github_pat(env_file=env_path)
     assert secret is not None
     assert secret.get_secret_value() == 'ghp_xyz'
+
+
+def test_load_github_pat_picks_agent_specific_from_explicit_env() -> None:
+    secret = load_github_pat(
+        {GITHUB_PAT_ENV: 'shared', f'{GITHUB_PAT_ENV}_1': 'agent-one'},
+        agent_id='1',
+    )
+    assert secret is not None
+    assert secret.get_secret_value() == 'agent-one'
+
+
+def test_load_github_pat_falls_back_to_shared_for_agent() -> None:
+    secret = load_github_pat({GITHUB_PAT_ENV: 'shared'}, agent_id='2')
+    assert secret is not None
+    assert secret.get_secret_value() == 'shared'
+
+
+def test_load_github_pat_sanitizes_agent_id() -> None:
+    secret = load_github_pat(
+        {f'{GITHUB_PAT_ENV}_AG_NT_X': 'special'},
+        agent_id='ag-nt.x',
+    )
+    assert secret is not None
+    assert secret.get_secret_value() == 'special'
+
+
+def test_load_github_pat_agent_specific_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(GITHUB_PAT_ENV, raising=False)
+    monkeypatch.delenv(f'{GITHUB_PAT_ENV}_2', raising=False)
+    env_path = tmp_path / 'envfile'
+    env_path.write_text(
+        f'{GITHUB_PAT_ENV}=shared\n{GITHUB_PAT_ENV}_2=agent-two\n',
+        encoding='utf-8',
+    )
+    secret = load_github_pat(env_file=env_path, agent_id='2')
+    assert secret is not None
+    assert secret.get_secret_value() == 'agent-two'
+
+
+def test_load_github_pat_agent_specific_dotenv_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(GITHUB_PAT_ENV, raising=False)
+    monkeypatch.delenv(f'{GITHUB_PAT_ENV}_3', raising=False)
+    env_path = tmp_path / 'envfile'
+    env_path.write_text(f'{GITHUB_PAT_ENV}=shared\n', encoding='utf-8')
+    secret = load_github_pat(env_file=env_path, agent_id='3')
+    assert secret is not None
+    assert secret.get_secret_value() == 'shared'
+
+
+def test_load_github_pat_agent_specific_required_missing_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_secrets_env(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match=f'{GITHUB_PAT_ENV}_4'):
+        load_github_pat(agent_id='4', required=True)
+
+
+def test_load_github_pat_agent_specific_missing_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_secrets_env(monkeypatch, tmp_path)
+    assert load_github_pat(agent_id='4') is None
+
+
+def test_load_bot_identity_returns_none_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_secrets_env(monkeypatch, tmp_path)
+    assert load_bot_identity() is None
+
+
+def test_load_bot_identity_returns_none_when_only_name_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_secrets_env(monkeypatch, tmp_path)
+    monkeypatch.setenv(GITHUB_BOT_NAME_ENV, 'Bot')
+    assert load_bot_identity() is None
+
+
+def test_load_bot_identity_explicit_env_returns_pair() -> None:
+    identity = load_bot_identity(
+        {GITHUB_BOT_NAME_ENV: 'Albedo Bot', GITHUB_BOT_EMAIL_ENV: 'bot@example.com'}
+    )
+    assert identity == ('Albedo Bot', 'bot@example.com')
+
+
+def test_load_bot_identity_picks_agent_specific_from_explicit_env() -> None:
+    identity = load_bot_identity(
+        {
+            GITHUB_BOT_NAME_ENV: 'Shared',
+            GITHUB_BOT_EMAIL_ENV: 'shared@example.com',
+            f'{GITHUB_BOT_NAME_ENV}_1': 'Agent One',
+            f'{GITHUB_BOT_EMAIL_ENV}_1': 'one@example.com',
+        },
+        agent_id='1',
+    )
+    assert identity == ('Agent One', 'one@example.com')
+
+
+def test_load_bot_identity_falls_back_to_shared_for_agent() -> None:
+    identity = load_bot_identity(
+        {GITHUB_BOT_NAME_ENV: 'Shared', GITHUB_BOT_EMAIL_ENV: 'shared@example.com'},
+        agent_id='2',
+    )
+    assert identity == ('Shared', 'shared@example.com')
+
+
+def test_load_bot_identity_reads_from_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(GITHUB_BOT_NAME_ENV, raising=False)
+    monkeypatch.delenv(GITHUB_BOT_EMAIL_ENV, raising=False)
+    env_path = tmp_path / 'envfile'
+    env_path.write_text(
+        f'{GITHUB_BOT_NAME_ENV}=Albedo Bot\n{GITHUB_BOT_EMAIL_ENV}=bot@example.com\n',
+        encoding='utf-8',
+    )
+    identity = load_bot_identity(env_file=env_path)
+    assert identity == ('Albedo Bot', 'bot@example.com')

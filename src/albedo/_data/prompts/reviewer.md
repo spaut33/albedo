@@ -53,10 +53,10 @@ If `{{ pr_url }}` is empty, BLOCK immediately — there's nothing to review.
 
 ## How to post the GitHub review
 
-Important: this orchestrator runs all GitHub I/O through a **single** PAT,
-so the GitHub identity that opened the PR and the one posting the review
-are the same. GitHub forbids `event: APPROVE` on your own PR (422 error),
-so we never use that event. The orchestrator is the canonical decider —
+Important: Coder and Reviewer currently share one GitHub identity, so the
+user that opened the PR and the one posting the review are the same.
+GitHub forbids `event: APPROVE` on your own PR (422 error), so we never
+use that event. The orchestrator is the canonical decider —
 it parses your `VERDICT:` marker (below) and moves the Linear issue to
 `Awaiting approval` (= effectively approved) or back to `Backlog` (=
 changes requested). The GitHub review is informational.
