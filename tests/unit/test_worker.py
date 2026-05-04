@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import multiprocessing as mp
 import shutil
 import subprocess
@@ -966,19 +967,54 @@ DECOMPOSITION:
   "children": [
     {
       "title": "Add filter API",
-      "description": "Implement /filter endpoint",
+      "context": "Implement /filter endpoint",
+      "implementation_notes": "Add `filter_handler` in `src/api/filters.py`.",
+      "files_to_touch": ["src/api/filters.py", "src/api/router.py"],
+      "relevant_symbols": ["filter_handler", "Router.register"],
       "acceptance_criteria": ["Returns 200 on empty", "Rejects invalid"],
       "estimate": 2
     },
     {
       "title": "Wire UI button",
-      "description": "Frontend toggle for filter",
+      "context": "Frontend toggle for filter",
+      "implementation_notes": "Add `<FilterToggle>` in `src/ui/Toolbar.tsx`.",
+      "files_to_touch": ["src/ui/Toolbar.tsx", "src/ui/hooks.ts"],
+      "relevant_symbols": ["FilterToggle", "useFilter"],
       "acceptance_criteria": ["Button visible", "Triggers API"],
       "estimate": 3
     }
   ]
 }
 """
+
+
+def _grounded_child(
+    *,
+    title: str = 'Add filter API',
+    context: str = 'Implement /filter endpoint',
+    implementation_notes: str = (
+        'Add `filter_handler` in `src/api/filters.py` and register '
+        'the route in `src/api/router.py`.'
+    ),
+    files_to_touch: tuple[str, ...] = ('src/api/filters.py', 'src/api/router.py'),
+    relevant_symbols: tuple[str, ...] = ('filter_handler', 'Router.register'),
+    acceptance_criteria: tuple[str, ...] = ('Returns 200 on empty',),
+    estimate: int = 2,
+) -> dict[str, object]:
+    return {
+        'title': title,
+        'context': context,
+        'implementation_notes': implementation_notes,
+        'files_to_touch': list(files_to_touch),
+        'relevant_symbols': list(relevant_symbols),
+        'acceptance_criteria': list(acceptance_criteria),
+        'estimate': estimate,
+    }
+
+
+def _decomp_text_from(*children: dict[str, object]) -> str:
+    payload = {'rationale': 'r', 'children': list(children)}
+    return 'DECOMPOSITION:\n' + json.dumps(payload)
 
 
 def test_parse_decomposition_extracts_children() -> None:
@@ -1011,33 +1047,147 @@ def test_parse_decomposition_rejects_invalid_json() -> None:
 
 
 def test_parse_decomposition_rejects_too_few_children() -> None:
-    text = (
-        'DECOMPOSITION:\n'
-        '{"children": [{"title": "x", "description": "y", '
-        '"acceptance_criteria": ["a"], "estimate": 1}]}'
-    )
+    text = _decomp_text_from(_grounded_child())
     with pytest.raises(worker_mod.DecompositionParseError, match='length must be'):
         worker_mod.parse_decomposition(text)
 
 
 def test_parse_decomposition_rejects_bad_estimate() -> None:
-    bad = '{"title": "x", "description": "y", '
-    bad += '"acceptance_criteria": ["a"], "estimate": 4}'
-    ok = '{"title": "z", "description": "y", '
-    ok += '"acceptance_criteria": ["b"], "estimate": 2}'
-    text = 'DECOMPOSITION:\n{"children": [' + bad + ',' + ok + ']}'
+    bad = _grounded_child(estimate=4)
+    ok = _grounded_child(title='z')
     with pytest.raises(worker_mod.DecompositionParseError, match='estimate'):
-        worker_mod.parse_decomposition(text)
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
 
 
 def test_parse_decomposition_rejects_empty_ac() -> None:
-    bad = '{"title": "x", "description": "y", '
-    bad += '"acceptance_criteria": [], "estimate": 1}'
-    ok = '{"title": "z", "description": "y", '
-    ok += '"acceptance_criteria": ["b"], "estimate": 2}'
-    text = 'DECOMPOSITION:\n{"children": [' + bad + ',' + ok + ']}'
+    bad = _grounded_child(acceptance_criteria=())
+    ok = _grounded_child(title='z')
     with pytest.raises(worker_mod.DecompositionParseError, match='non-empty list'):
-        worker_mod.parse_decomposition(text)
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
+
+
+def test_parse_decomposition_extracts_grounded_fields() -> None:
+    decomp = worker_mod.parse_decomposition(_good_decomposition_text())
+    first = decomp.children[0]
+    assert first.context == 'Implement /filter endpoint'
+    assert 'filter_handler' in first.implementation_notes
+    assert first.files_to_touch == ('src/api/filters.py', 'src/api/router.py')
+    assert first.relevant_symbols == ('filter_handler', 'Router.register')
+
+
+def test_parse_decomposition_rejects_legacy_description_schema() -> None:
+    # The previous schema used ``description`` and lacked all four
+    # grounded fields; feeding it to the new parser must fail loudly,
+    # not silently coerce.
+    legacy = (
+        'DECOMPOSITION:\n'
+        '{"children": ['
+        '{"title": "x", "description": "y", '
+        '"acceptance_criteria": ["a"], "estimate": 1},'
+        '{"title": "z", "description": "y", '
+        '"acceptance_criteria": ["b"], "estimate": 2}'
+        ']}'
+    )
+    with pytest.raises(worker_mod.DecompositionParseError, match='context is missing'):
+        worker_mod.parse_decomposition(legacy)
+
+
+@pytest.mark.parametrize(
+    'field',
+    ['context', 'implementation_notes', 'files_to_touch', 'relevant_symbols'],
+)
+def test_parse_decomposition_rejects_missing_grounded_field(field: str) -> None:
+    bad = _grounded_child()
+    del bad[field]
+    ok = _grounded_child(title='z')
+    with pytest.raises(worker_mod.DecompositionParseError, match=f'{field} is missing'):
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
+
+
+def test_parse_decomposition_rejects_abstract_implementation_notes() -> None:
+    bad = _grounded_child(
+        implementation_notes='We will refactor the validator and add tests.'
+    )
+    ok = _grounded_child(title='z')
+    with pytest.raises(
+        worker_mod.DecompositionParseError,
+        match='implementation_notes must cite at least one',
+    ):
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
+
+
+def test_parse_decomposition_accepts_implementation_notes_with_path_only() -> None:
+    notes_with_path = 'Update src/api/filters.py to add a new branch.'
+    decomp = worker_mod.parse_decomposition(
+        _decomp_text_from(
+            _grounded_child(implementation_notes=notes_with_path),
+            _grounded_child(title='z'),
+        )
+    )
+    assert decomp.children[0].implementation_notes == notes_with_path
+
+
+def test_parse_decomposition_accepts_implementation_notes_with_glob() -> None:
+    decomp = worker_mod.parse_decomposition(
+        _decomp_text_from(
+            _grounded_child(implementation_notes='Touch every *.py under tests.'),
+            _grounded_child(title='z'),
+        )
+    )
+    assert '*.py' in decomp.children[0].implementation_notes
+
+
+def test_parse_decomposition_rejects_files_to_touch_not_list() -> None:
+    bad = _grounded_child()
+    bad['files_to_touch'] = 'src/foo.py'
+    ok = _grounded_child(title='z')
+    with pytest.raises(
+        worker_mod.DecompositionParseError,
+        match='files_to_touch must be a non-empty list',
+    ):
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
+
+
+def test_parse_decomposition_rejects_files_to_touch_empty_list() -> None:
+    bad = _grounded_child(files_to_touch=())
+    ok = _grounded_child(title='z')
+    with pytest.raises(
+        worker_mod.DecompositionParseError,
+        match='files_to_touch must be a non-empty list',
+    ):
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
+
+
+def test_parse_decomposition_rejects_files_to_touch_with_empty_string() -> None:
+    bad = _grounded_child()
+    bad['files_to_touch'] = ['src/api/filters.py', '']
+    ok = _grounded_child(title='z')
+    with pytest.raises(
+        worker_mod.DecompositionParseError,
+        match=r'files_to_touch\[1\] must be a non-empty string',
+    ):
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
+
+
+def test_parse_decomposition_rejects_relevant_symbols_with_non_string() -> None:
+    bad = _grounded_child()
+    bad['relevant_symbols'] = ['Foo.bar', 7]
+    ok = _grounded_child(title='z')
+    with pytest.raises(
+        worker_mod.DecompositionParseError,
+        match=r'relevant_symbols\[1\] must be a non-empty string',
+    ):
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
+
+
+def test_parse_decomposition_rejects_relevant_symbols_empty_list() -> None:
+    bad = _grounded_child(relevant_symbols=())
+    ok = _grounded_child(title='z')
+    with pytest.raises(
+        worker_mod.DecompositionParseError,
+        match='relevant_symbols must be a non-empty list',
+    ):
+        worker_mod.parse_decomposition(_decomp_text_from(bad, ok))
 
 
 class _ArchitectFakeLinear(_FakeLinear):

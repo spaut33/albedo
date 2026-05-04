@@ -1271,7 +1271,10 @@ def _post_spawn_reviewer(
 @dataclass(frozen=True, slots=True)
 class ChildSpec:
     title: str
-    description: str
+    context: str
+    implementation_notes: str
+    files_to_touch: tuple[str, ...]
+    relevant_symbols: tuple[str, ...]
     acceptance_criteria: tuple[str, ...]
     estimate: int
     depends_on: tuple[int, ...] = ()
@@ -1290,8 +1293,10 @@ class DecompositionParseError(ValueError):
 def parse_decomposition(text: str) -> Decomposition:
     """Extract `DECOMPOSITION:` JSON block and validate shape.
 
-    Validates: 2..MAX_CHILDREN children; each has title, description,
-    acceptance_criteria (≥1 item), estimate in {1,2,3,5,8}.
+    Validates: 2..MAX_CHILDREN children; each has title, context,
+    implementation_notes (with at least one backticked identifier or
+    path-like token), non-empty files_to_touch / relevant_symbols
+    string lists, acceptance_criteria (≥1 item), estimate in {1,2,3,5,8}.
     """
     header = DECOMPOSITION_HEADER.search(text)
     if header is None:
@@ -1359,20 +1364,80 @@ def _strip_code_fence(text: str) -> str:
     return inner.strip()
 
 
+_BACKTICKED_IDENT_RE = re.compile(r'`[^`\n]+`')
+# A path-like token is one of:
+#   * a glob with extension, e.g. ``*.py``
+#   * a slash-separated path, e.g. ``src/albedo/worker.py``
+#   * a bare filename with a known code/doc extension, e.g. ``worker.py``
+_PATH_LIKE_RE = re.compile(
+    r'\*\.[A-Za-z][A-Za-z0-9]{0,8}\b'
+    r'|[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+'
+    r'|\b[A-Za-z0-9_-]+\.(?:py|md|tsx?|jsx?|mjs|json|ya?ml|toml|rs|go|sh|html?|css|sql)\b'
+)
+
+
+def _validate_str_list(idx: int, field: str, value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise DecompositionParseError(
+            f'child[{idx}].{field} must be a non-empty list of strings'
+        )
+    items = cast('list[Any]', value)
+    if not items:
+        raise DecompositionParseError(
+            f'child[{idx}].{field} must be a non-empty list of strings'
+        )
+    out: list[str] = []
+    for j, item in enumerate(items):
+        if not isinstance(item, str) or not item.strip():
+            raise DecompositionParseError(
+                f'child[{idx}].{field}[{j}] must be a non-empty string'
+            )
+        out.append(item.strip())
+    return tuple(out)
+
+
 def _validate_child_spec(idx: int, raw: object) -> ChildSpec:
     if not isinstance(raw, dict):
         raise DecompositionParseError(f'child[{idx}] must be an object')
     raw_dict: dict[str, Any] = raw  # type: ignore[assignment]
     title = raw_dict.get('title')
-    description = raw_dict.get('description')
-    ac = raw_dict.get('acceptance_criteria')
-    estimate = raw_dict.get('estimate')
     if not isinstance(title, str) or not title.strip():
         raise DecompositionParseError(f'child[{idx}].title must be non-empty string')
-    if not isinstance(description, str) or not description.strip():
+
+    for field in ('context', 'implementation_notes'):
+        if field not in raw_dict:
+            raise DecompositionParseError(f'child[{idx}].{field} is missing')
+        value = raw_dict[field]
+        if not isinstance(value, str) or not value.strip():
+            raise DecompositionParseError(
+                f'child[{idx}].{field} must be non-empty string'
+            )
+
+    context = cast('str', raw_dict['context']).strip()
+    implementation_notes = cast('str', raw_dict['implementation_notes']).strip()
+
+    if not (
+        _BACKTICKED_IDENT_RE.search(implementation_notes)
+        or _PATH_LIKE_RE.search(implementation_notes)
+    ):
         raise DecompositionParseError(
-            f'child[{idx}].description must be non-empty string'
+            f'child[{idx}].implementation_notes must cite at least one '
+            'backticked identifier (e.g. `Foo.bar`) or path-like token '
+            '(e.g. src/foo.py, *.py)'
         )
+
+    if 'files_to_touch' not in raw_dict:
+        raise DecompositionParseError(f'child[{idx}].files_to_touch is missing')
+    files_to_touch = _validate_str_list(
+        idx, 'files_to_touch', raw_dict['files_to_touch']
+    )
+    if 'relevant_symbols' not in raw_dict:
+        raise DecompositionParseError(f'child[{idx}].relevant_symbols is missing')
+    relevant_symbols = _validate_str_list(
+        idx, 'relevant_symbols', raw_dict['relevant_symbols']
+    )
+
+    ac = raw_dict.get('acceptance_criteria')
     if not isinstance(ac, list) or not ac:
         raise DecompositionParseError(
             f'child[{idx}].acceptance_criteria must be non-empty list'
@@ -1385,6 +1450,7 @@ def _validate_child_spec(idx: int, raw: object) -> ChildSpec:
                 f'child[{idx}].acceptance_criteria[{j}] must be non-empty string'
             )
         ac_strs.append(item.strip())
+    estimate = raw_dict.get('estimate')
     if not isinstance(estimate, int) or estimate not in ALLOWED_ESTIMATES:
         raise DecompositionParseError(
             f'child[{idx}].estimate must be one of '
@@ -1405,7 +1471,10 @@ def _validate_child_spec(idx: int, raw: object) -> ChildSpec:
         deps_ints.append(dep)
     return ChildSpec(
         title=title.strip(),
-        description=description.strip(),
+        context=context,
+        implementation_notes=implementation_notes,
+        files_to_touch=files_to_touch,
+        relevant_symbols=relevant_symbols,
         acceptance_criteria=tuple(ac_strs),
         estimate=estimate,
         depends_on=tuple(deps_ints),
@@ -1671,7 +1740,7 @@ def _post_spawn_architect(
 def _format_child_description(spec: ChildSpec, *, parent_identifier: str) -> str:
     bullets = '\n'.join(f'* {ac}' for ac in spec.acceptance_criteria)
     return (
-        f'{spec.description}\n\n'
+        f'{spec.context}\n\n'
         f'## Acceptance Criteria\n\n'
         f'{bullets}\n\n'
         f'## Notes\n\nParent: {parent_identifier}.\n'

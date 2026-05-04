@@ -138,6 +138,12 @@ def test_apply_marker_ignores_empty_body() -> None:
 def test_decomposition_parser_unaffected_by_issue_update_block() -> None:
     """An ISSUE_UPDATE block in the same output must not corrupt JSON parsing
     of DECOMPOSITION:."""
+    grounded = (
+        '"context": "ctx", '
+        '"implementation_notes": "Touch `src/foo.py`.", '
+        '"files_to_touch": ["src/foo.py"], '
+        '"relevant_symbols": ["Foo.bar"], '
+    )
     text = (
         '<<<ISSUE_UPDATE>>>\n'
         'rewritten body\n'
@@ -145,10 +151,8 @@ def test_decomposition_parser_unaffected_by_issue_update_block() -> None:
         '\nDECOMPOSITION:\n'
         '```json\n'
         '{"rationale": "split", "children": ['
-        '{"title": "A", "description": "a", '
-        '"acceptance_criteria": ["x"], "estimate": 1},'
-        '{"title": "B", "description": "b", '
-        '"acceptance_criteria": ["y"], "estimate": 2}'
+        '{"title": "A", ' + grounded + '"acceptance_criteria": ["x"], "estimate": 1},'
+        '{"title": "B", ' + grounded + '"acceptance_criteria": ["y"], "estimate": 2}'
         ']}\n'
         '```\n'
     )
