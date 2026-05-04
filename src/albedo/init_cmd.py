@@ -75,7 +75,10 @@ LINEAR_API_KEY=lin_api_replace_me
 # Recommended: dedicated bot account so PRs/comments don't show your name
 # and you can review/decline them on GitHub. See
 # docs/per-agent-github-identities.md for setup steps.
-# https://github.com/settings/tokens — scopes: repo, workflow.
+# https://github.com/settings/tokens — Classic PAT, scopes: repo, workflow.
+# Fine-grained PATs are NOT recommended right now (they 403 on every write
+# endpoint with the deprecated MCP server even when the UI shows Pull
+# requests: write — see the doc above).
 GITHUB_PERSONAL_ACCESS_TOKEN=ghp_replace_me
 
 # Optional: per-agent PAT overrides (mirrors LINEAR_API_KEY_<id>; reserved
