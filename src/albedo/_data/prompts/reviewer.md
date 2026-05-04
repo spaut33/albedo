@@ -61,16 +61,59 @@ If `{{ pr_url }}` is empty, BLOCK immediately — there's nothing to review.
      `git diff {{ base_branch }}...HEAD` semantics — same as today's
      behavior. This branch is additive; first-pass reviews are unchanged.
    - **Prior reviewer review found** (call its `commit_id` `<sha>`):
+     - **Negative path — missing or unusable `<sha>`.** If `<sha>` is
+       absent from the prior review payload, or if running
+       `git log <sha>..HEAD` in `{{ worktree_path }}` errors (e.g.
+       `unknown revision`, `bad object`, non-zero exit), do **not**
+       silently emit `APPROVE`. Fall back to the no-prior-review
+       branch above (full pass against `{{ base_branch }}`, full
+       four-agent pass) and add a one-line note in the review body
+       documenting the fallback (e.g. "prior-review `commit_id` `<sha>`
+       not resolvable in worktree — falling back to full pass against
+       `{{ base_branch }}`").
      - Run `git log <sha>..HEAD` in `{{ worktree_path }}` to enumerate
-       the commits added since the prior pass. If that range is empty
-       (no new commits since the prior review), there is nothing new
-       to review — re-emit the prior verdict (`VERDICT: APPROVE` if the
-       prior review approved, otherwise `VERDICT: REQUEST_CHANGES`)
-       with a one-line note that no commits were added since `<sha>`.
-     - Otherwise compute the new-commits diff with
-       `git diff <sha>..HEAD` in `{{ worktree_path }}`. **Scope the
-       four-agent pass below to this diff only** — do not re-do a fresh
-       pass over the full diff against `{{ base_branch }}`.
+       the commits added since the prior pass.
+     - **Empty-range fast-path — no new commits since prior review.**
+       If `git log <sha>..HEAD` succeeds but returns zero commits (e.g.
+       the only change since the prior pass was a force-push or
+       merge-conflict resolution that did not add reviewable commits),
+       there is nothing new to review. In that case:
+         1. **Skip the four-agent Task-tool sub-agent pass entirely.**
+            Do not spawn the AC / tests / correctness / style sub-agents
+            — there is no new diff for them to inspect.
+         2. Post **exactly one** GitHub review with `event: COMMENT`.
+            Its body must explicitly note that there are no new commits
+            since the prior review (wording such as "no new commits
+            since prior review at `<sha>`" is fine). The review must
+            carry **no line-anchored sub-comments** — re-anchoring on
+            untouched lines would just duplicate the prior pass.
+         3. Choose the `VERDICT:` line by inspecting the prior review's
+            verdict and any intervening commits the reviewer can
+            verify in the worktree:
+              - If the prior verdict was `APPROVE`, emit
+                `VERDICT: APPROVE`.
+              - If the prior verdict was `REQUEST_CHANGES` but its
+                line-anchored findings are now demonstrably resolved
+                (e.g. the offending lines were rewritten or removed by
+                intervening commits you can point to in `git log` /
+                `git show` output), emit `VERDICT: APPROVE` and cite
+                the resolving commit SHAs in the review body.
+              - If the prior verdict was `REQUEST_CHANGES` and its
+                findings are **not** resolved (no intervening commits
+                addressed them), emit `VERDICT: BLOCKED <reason>` —
+                `<reason>` should be a short phrase such as "prior
+                REQUEST_CHANGES findings unresolved and no new commits
+                to review". **Never** emit `VERDICT: REQUEST_CHANGES`
+                in the empty-range case — that would re-post the same
+                findings the prior pass already raised.
+         4. Stop here. Skip the rest of step 4, step 5, step 6, and
+            step 7 (the four-agent pass and synthesis). Proceed
+            directly to "Final response format".
+     - **Non-empty range — commits added since prior review.** Compute
+       the new-commits diff with `git diff <sha>..HEAD` in
+       `{{ worktree_path }}`. **Scope the four-agent pass below to this
+       diff only** — do not re-do a fresh pass over the full diff
+       against `{{ base_branch }}`.
      - Treat the prior review's line-anchored findings as **resolved**
        unless the same `(file, line)` appears in the new-commits diff
        (i.e. that line was re-touched in `<sha>..HEAD`). Never re-post
@@ -137,6 +180,11 @@ Therefore **always** post a single GitHub review with **`event: COMMENT`**:
   request-changes review. On a follow-up pass (prior review detected in
   step 3), only post line comments on lines that appear in the
   `<sha>..HEAD` diff — never re-post on a line that was not re-touched.
+- For the **empty-range fast-path** (step 4, "Empty-range fast-path"):
+  body is a single short paragraph explicitly noting "no new commits
+  since prior review" (or equivalent wording), with **no line-anchored
+  sub-comments at all**. The accompanying `VERDICT:` line is `APPROVE`
+  or `BLOCKED <reason>` per step 4 — never `REQUEST_CHANGES`.
 
 Use only the GitHub MCP for posting reviews. Do NOT push commits, do NOT
 edit files in the worktree. You are read-only on code.
