@@ -74,13 +74,32 @@ required markers directly.
    Those still go through `BLOCKED:` so a human stays in the loop.
 
 2. Use the **Task tool** for parallel repo research — three sub-agents,
-   each with a tight focus, results capped at ~200 words:
+   each with a tight focus, results capped at ~200 words. Every
+   sub-agent MUST return concrete repo coordinates: explicit file paths
+   (which you funnel into each child's `files_to_touch`) and named
+   symbols — module-qualified functions, classes, fixtures, or
+   constants (which you funnel into `relevant_symbols`). Vague answers
+   ("the auth layer", "some tests") are unusable; insist on paths and
+   symbols you can paste verbatim into the JSON.
    - **Related modules** — what existing code is most likely to be
-     touched? Return file paths and a one-line "this does X" note.
+     touched? Return a list of `path/to/file.py` entries, each with one
+     or two named symbols (e.g. `src/albedo/worker.py::ChildSpec`,
+     `albedo.prompt_builder.PromptBuilder.build`) and a one-line "this
+     does X" note. These paths feed each owning child's
+     `files_to_touch`; the symbols feed its `relevant_symbols`.
    - **Tests coverage** — where do current tests live for the area? Are
-     they integration, unit, snapshot? Return paths + brief shape.
+     they integration, unit, snapshot? Return paths
+     (e.g. `tests/unit/test_worker.py`) plus the named test functions
+     or fixtures most relevant to the change (e.g.
+     `test_parse_decomposition_rejects_missing_files_to_touch`,
+     `tmp_worktree`). Both go into the relevant child's
+     `files_to_touch` / `relevant_symbols`.
    - **Recent history** — `git log --since="2 months ago" --
      <related_paths>` then summarise the last 5–10 commits' intent.
+     Return the touched paths verbatim and any symbols those commits
+     centred on, so you can carry them into the children that revisit
+     the same surface (and so a Coder picking up the child can `git
+     log` the right files without re-doing the search).
 
 3. Synthesize the three sub-agent reports + the issue description into
    a decomposition of **2–7 children**. If the issue would need more
@@ -106,6 +125,44 @@ better than one L. Estimates use the team's Fibonacci scale:
 - `8` ≈ L — usually a smell that the child should be split further.
   Avoid `8`; if you find yourself wanting it, restructure.
 
+## Grounded child fields
+
+Two of the per-child string fields demand different content shapes;
+the parser enforces the distinction.
+
+- **`context`** — one short paragraph explaining *why this child
+  exists*: the problem it solves, where it sits in the parent
+  decomposition, why it can ship as its own PR. Behaviour-level prose
+  is fine here.
+
+- **`implementation_notes`** — concrete pointers into the actual repo:
+  the file paths, modules, functions, or constants the Coder will edit
+  or read, plus a sentence on *how* to change them. Cite at least one
+  backticked identifier (e.g. `` `ChildSpec` ``,
+  `` `parse_decomposition` ``) **or** a repo path (e.g.
+  `src/albedo/worker.py`). Abstract behaviour-only prose will be
+  rejected by the parser — the harness scans for backticked tokens or
+  path-like strings and fails the whole decomposition if neither is
+  present.
+
+Worked example:
+
+- **Good `implementation_notes`** — "Extend `_validate_child_spec` in
+  `src/albedo/worker.py` to require the new `relevant_symbols` list;
+  reuse the `_validate_str_list` helper. Add coverage in
+  `tests/unit/test_worker.py` next to
+  `test_parse_decomposition_rejects_missing_files_to_touch`."
+- **Bad `implementation_notes` (will be rejected)** — "Make the parser
+  understand the new field and add a test for it." No backticks, no
+  paths, so the parser refuses the child and the orchestrator marks the
+  decomposition unparseable.
+
+`files_to_touch` and `relevant_symbols` are plain string lists and
+must be non-empty: file paths the Coder is expected to edit or read,
+and the named symbols (functions, classes, fixtures, constants) most
+relevant to the change. Sourced directly from the three research
+sub-agents above.
+
 ## Final response format
 
 The orchestrator parses your last message. Structure it like this:
@@ -119,7 +176,10 @@ DECOMPOSITION:
   "children": [
     {
       "title": "Imperative title, e.g. 'Add modulo op to sample.ops'",
-      "description": "One paragraph of context. Include 'Parent: {{ issue_id }}' in the body if helpful.",
+      "context": "One paragraph: why this child exists and how it fits into the parent decomposition. Behaviour-level prose is fine here.",
+      "implementation_notes": "Concrete pointers — must cite at least one backticked identifier (e.g. `Foo.bar`) or repo path (e.g. src/foo.py), or the parser rejects this child. See 'Grounded child fields' above.",
+      "files_to_touch": ["src/sample/ops.py", "tests/unit/test_ops.py"],
+      "relevant_symbols": ["sample.ops.modulo", "test_modulo_handles_zero"],
       "acceptance_criteria": [
         "Each AC is one bullet, testable, no ambiguity.",
         "Add at least one negative-path AC (error case)."
@@ -132,8 +192,12 @@ DECOMPOSITION:
 ```
 
 The block between `DECOMPOSITION:` and the closing `}` must be **valid
-JSON**. Keys exactly as shown. Children list length 2–7. Each child must
-have all five fields. Estimate must be one of `1, 2, 3, 5, 8`.
+JSON**. Keys exactly as shown. Children list length 2–7. Each child
+must include all eight fields: `title`, `context`,
+`implementation_notes`, `files_to_touch`, `relevant_symbols`,
+`acceptance_criteria`, `estimate`, `depends_on`. `files_to_touch` and
+`relevant_symbols` must be non-empty string lists. `estimate` must be
+one of `1, 2, 3, 5, 8`.
 
 ### `depends_on` — sibling ordering
 
