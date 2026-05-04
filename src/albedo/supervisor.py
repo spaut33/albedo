@@ -25,6 +25,7 @@ from multiprocessing.process import BaseProcess
 from pathlib import Path
 from types import FrameType
 
+from albedo.ci_redispatch import redispatch_on_failed_ci
 from albedo.comment_redispatch import TriageFn, redispatch_on_new_user_comments
 from albedo.comment_triage import triage_user_reply
 from albedo.config import OrchestratorConfig, load_github_pat, load_linear_api_key
@@ -442,6 +443,36 @@ def _housekeeping_loop(
                             )
                     except Exception as exc:
                         log.warning('housekeeping redispatch tick failed: %s', exc)
+
+                if (
+                    options.config.features.ci_failed_pr_dispatch
+                    and github is not None
+                    and options.config.repo.github is not None
+                ):
+                    try:
+                        ci_report = redispatch_on_failed_ci(
+                            linear=client,
+                            github=github,
+                            state_dir=options.config.state_dir,
+                            repo_owner=options.config.repo.github.owner,
+                            repo_name=options.config.repo.github.repo,
+                            team_id=team.id,
+                            project_id=options.config.linear.project_id,
+                        )
+                        if ci_report.fired:
+                            log.info(
+                                'housekeeping: redispatched %d issue(s) on failed CI',
+                                len(ci_report.fired),
+                            )
+                        if ci_report.seeded:
+                            log.info(
+                                'housekeeping: seeded %d CI run(s) for future '
+                                'failure detection (%s)',
+                                len(ci_report.seeded),
+                                ', '.join(ci_report.seeded),
+                            )
+                    except Exception as exc:
+                        log.warning('housekeeping CI redispatch tick failed: %s', exc)
 
                 now_mono = time.monotonic()
                 if (

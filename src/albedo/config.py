@@ -203,6 +203,11 @@ class FeaturesConfig(BaseModel):
         description='Re-dispatch issues parked in human-gated states when a new '
         'user comment lands.',
     )
+    ci_failed_pr_dispatch: bool = Field(
+        default=True,
+        description='Re-route Awaiting-approval issues whose PR CI has freshly '
+        'failed back to In Progress, with a comment carrying the failing log tail.',
+    )
     comment_triage: bool = Field(
         default=True,
         description='Before redispatching on a new user comment, ask the LLM '
