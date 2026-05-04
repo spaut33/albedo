@@ -38,16 +38,11 @@ touch Linear.
 ## Implementation
 
 1. Build an internal plan (do not write it anywhere external).
-2. **Load relevant skills.** Before writing code, invoke the skill(s) that
-   match what you're about to touch:
-   - `/dignified-python` — if you'll write or refactor Python.
-   - `/react-best-practices` — if you'll touch React/Next.js components
-     or data fetching.
-   - `/fastapi-code-review` — if you'll add or modify FastAPI routes,
-     dependencies, or async handlers.
-   - `/next-intl-saas` — if you'll add translations or change i18n.
-   - `/claude-api` — if you'll write code that imports the Anthropic SDK.
-   Skip skills that don't match — speculative loading just bloats context.
+2. **Load relevant skills.** Before writing code, check the available
+   skills list and invoke any whose triggers match what you're about to
+   touch (language, framework, or domain of the change). Skip skills
+   that don't match — speculative loading just bloats context. If no
+   skill matches, proceed without one.
 3. Implement in logical commits using Conventional Commits style with the
    issue identifier in scope: `feat({{ issue_id }}): ...`,
    `fix({{ issue_id }}): ...`.
