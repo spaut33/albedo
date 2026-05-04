@@ -374,7 +374,10 @@ def test_load_github_pat_required_raises(
         load_github_pat(required=True)
 
 
-def test_load_github_pat_reads_dotenv(tmp_path: Path) -> None:
+def test_load_github_pat_reads_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(GITHUB_PAT_ENV, raising=False)
     env_path = tmp_path / 'envfile'
     env_path.write_text(f'{GITHUB_PAT_ENV}=ghp_xyz\n', encoding='utf-8')
     secret = load_github_pat(env_file=env_path)
