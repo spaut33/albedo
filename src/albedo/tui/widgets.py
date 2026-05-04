@@ -59,7 +59,7 @@ PHASE_COLORS: dict[str, str] = {
 }
 
 
-SPARK_BLOCKS: tuple[str, ...] = ('▁', '▂', '▃', '▄', '▅', '▆', '▇', '█')
+SPARK_BLOCKS: tuple[str, ...] = ('⣀', '⣄', '⣤', '⣦', '⣶', '⣷', '⣾', '⣿')
 GAUGE_FILLED = '█'
 GAUGE_HALF = '▒'
 GAUGE_EMPTY = '░'
@@ -449,7 +449,14 @@ def render_workers(
         if show_activity:
             assert activity is not None  # show_activity ↔ activity is not None
             samples = activity.get(view.agent_id, ())
-            row.append(sparkline(samples, width=ACT_COLUMN_WIDTH, max_value=1.0))
+            row.append(
+                sparkline(
+                    samples,
+                    width=ACT_COLUMN_WIDTH,
+                    max_value=1.0,
+                    color='grey50',
+                )
+            )
         if show_action:
             row.append(_action_cell(view, animated=animated))
         row.append(Text(_format_elapsed(elapsed), style='dim'))
