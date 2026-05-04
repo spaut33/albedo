@@ -24,26 +24,32 @@ their PRs from your own GitHub account.
 2. **Invite the bot as a collaborator** on each repo Albedo will touch,
    with **Write** access. Accept the invite from the bot's inbox.
 
-3. **Generate a PAT for the bot.** Either form works:
+3. **Generate a PAT for the bot.**
 
-   *Fine-grained (recommended)* — Settings → Developer settings →
-   Personal access tokens → Fine-grained tokens. Scope it to the
-   target repos with:
+   *Classic (recommended)* — Settings → Developer settings →
+   Personal access tokens → Tokens (classic) → Generate new token
+   (classic). Tick:
 
-   - **Contents**: Read/Write — push branches.
-   - **Pull requests**: Read/Write — open PRs, post comments and
-     reviews.
-   - **Metadata**: Read — required for any fine-grained PAT.
-   - **Actions**: Read — read workflow runs / jobs / logs (used by
-     the CI-redispatch flow in `github_client.list_workflow_runs`,
-     `list_workflow_jobs`, `get_workflow_job_logs`).
-   - **Workflows**: Read/Write — only if Coder will commit changes
-     under `.github/workflows/`. Read-only access to CI logs does not
-     need this.
+   - **`repo`** (the whole group) — covers contents R/W, PR creation,
+     PR review posting, comments. This is what Coder and Reviewer
+     actually need.
+   - **`workflow`** — only if Coder will commit changes under
+     `.github/workflows/`. Also implies `actions:read` (used by the
+     CI-redispatch flow in `github_client.list_workflow_runs` /
+     `list_workflow_jobs` / `get_workflow_job_logs`), so include it
+     unless you're sure CI logs aren't read by your setup.
 
-   *Classic* — `repo` + `workflow` covers the same surface
-   (`workflow` implies actions:read and the right to push workflow
-   files).
+   *Fine-grained — currently NOT recommended.* In testing, a
+   freshly-issued fine-grained PAT with `Contents: Read/Write`,
+   `Pull requests: Read/Write`, `Metadata: Read`, `Actions: Read`,
+   and `All repositories` access nonetheless returned `403
+   "Resource not accessible by personal access token"` on every
+   write endpoint we exercised — both `POST /pulls/{n}/reviews` and
+   even `POST /issues/{n}/comments`. Regenerating the token did not
+   help. The Classic PAT with `repo` + `workflow` works
+   immediately. Until GitHub or the deprecated
+   `@modelcontextprotocol/server-github` MCP behaves more
+   predictably with fine-grained PATs, prefer Classic.
 
 4. **Edit `$ALBEDO_HOME/.env`:**
 
