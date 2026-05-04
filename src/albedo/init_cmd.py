@@ -72,8 +72,24 @@ LINEAR_API_KEY=lin_api_replace_me
 # LINEAR_API_KEY_2=lin_api_agent_two
 
 # Required for E2E (PR creation through the GitHub MCP).
+# Recommended: dedicated bot account so PRs/comments don't show your name
+# and you can review/decline them on GitHub. See
+# docs/per-agent-github-identities.md for setup steps.
 # https://github.com/settings/tokens — scopes: repo, workflow.
 GITHUB_PERSONAL_ACCESS_TOKEN=ghp_replace_me
+
+# Optional: per-agent PAT overrides (mirrors LINEAR_API_KEY_<id>; reserved
+# for the future N-bots setup, harmless if unset).
+# GITHUB_PERSONAL_ACCESS_TOKEN_1=ghp_bot_one
+# GITHUB_PERSONAL_ACCESS_TOKEN_2=ghp_bot_two
+
+# Optional: bot git identity. When both are set, each worktree gets
+# `git config user.name/user.email` so commits are authored by the bot
+# instead of inheriting your global git config.
+# GITHUB_BOT_NAME=Albedo Bot
+# GITHUB_BOT_EMAIL=12345678+albedo-bot@users.noreply.github.com
+# GITHUB_BOT_NAME_1=Albedo Bot 1
+# GITHUB_BOT_EMAIL_1=12345678+albedo-bot-1@users.noreply.github.com
 """
 
 _REPO_MANIFEST_TEMPLATE = """\

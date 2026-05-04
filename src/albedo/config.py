@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
 LINEAR_API_KEY_ENV = 'LINEAR_API_KEY'
 GITHUB_PAT_ENV = 'GITHUB_PERSONAL_ACCESS_TOKEN'
+GITHUB_BOT_NAME_ENV = 'GITHUB_BOT_NAME'
+GITHUB_BOT_EMAIL_ENV = 'GITHUB_BOT_EMAIL'
 
 # `albedo init` and `albedo init-repo` write this sentinel into every field
 # the operator must edit before running. We reject it loudly at config load
@@ -388,14 +390,14 @@ def load_linear_api_key(
     Each level checks: explicit `env` mapping → process env → `.env` file.
     Raises `RuntimeError` with a helpful message if neither source resolves.
     """
-    keys = _candidate_env_keys(agent_id)
+    keys = _candidate_env_keys(agent_id, base=LINEAR_API_KEY_ENV)
 
     if env is not None:
         for key in keys:
             raw = env.get(key, '').strip()
             if raw:
                 return SecretStr(raw)
-        raise RuntimeError(_missing_message(agent_id))
+        raise RuntimeError(_missing_message(agent_id, base=LINEAR_API_KEY_ENV))
 
     config_kwargs: dict[str, Any] = {
         '_env_file': str(env_file if env_file is not None else default_env_file()),
@@ -406,25 +408,21 @@ def load_linear_api_key(
         value = secrets.linear_api_key.get_secret_value().strip()
         if value:
             return SecretStr(value)
-        raise RuntimeError(_missing_message(None))
+        raise RuntimeError(_missing_message(None, base=LINEAR_API_KEY_ENV))
 
     # Agent-specific lookup uses dynamic env-var names that pydantic-settings
     # doesn't know about ahead of time, so do a manual resolve.
-    import os
-
-    overlay = _env_file_overlay(env_file)
-    for key in keys:
-        raw = (os.environ.get(key) or overlay.get(key) or '').strip()
-        if raw:
-            return SecretStr(raw)
-    raise RuntimeError(_missing_message(agent_id))
+    resolved = _resolve_dynamic_env(keys, env_file=env_file)
+    if resolved is not None:
+        return SecretStr(resolved)
+    raise RuntimeError(_missing_message(agent_id, base=LINEAR_API_KEY_ENV))
 
 
-def _candidate_env_keys(agent_id: str | None) -> list[str]:
+def _candidate_env_keys(agent_id: str | None, *, base: str) -> list[str]:
     if agent_id is None:
-        return [LINEAR_API_KEY_ENV]
+        return [base]
     sanitized = ''.join(c if c.isalnum() else '_' for c in agent_id).upper()
-    return [f'{LINEAR_API_KEY_ENV}_{sanitized}', LINEAR_API_KEY_ENV]
+    return [f'{base}_{sanitized}', base]
 
 
 def _env_file_overlay(env_file: Path | str | None) -> dict[str, str]:
@@ -449,14 +447,24 @@ def _env_file_overlay(env_file: Path | str | None) -> dict[str, str]:
     return overlay
 
 
-def _missing_message(agent_id: str | None) -> str:
+def _resolve_dynamic_env(keys: list[str], *, env_file: Path | str | None) -> str | None:
+    """Look up env-var names dynamically (process env first, then `.env`)."""
+    import os
+
+    overlay = _env_file_overlay(env_file)
+    for key in keys:
+        raw = (os.environ.get(key) or overlay.get(key) or '').strip()
+        if raw:
+            return raw
+    return None
+
+
+def _missing_message(agent_id: str | None, *, base: str) -> str:
     if agent_id is None:
-        target = LINEAR_API_KEY_ENV
+        target = base
     else:
         sanitized = ''.join(c if c.isalnum() else '_' for c in agent_id).upper()
-        target = (
-            f'{LINEAR_API_KEY_ENV}_{sanitized} (or {LINEAR_API_KEY_ENV} as fallback)'
-        )
+        target = f'{base}_{sanitized} (or {base} as fallback)'
     return (
         f'{target} is not set. Put it in {default_env_file()} '
         f'(run `albedo init` to seed it) or export it in your shell.'
@@ -464,26 +472,90 @@ def _missing_message(agent_id: str | None) -> str:
 
 
 def load_github_pat(
+    env: dict[str, str] | None = None,
     *,
     env_file: Path | str | None = None,
+    agent_id: str | None = None,
     required: bool = False,
 ) -> SecretStr | None:
     """Resolve the GitHub PAT used by the GitHub MCP server.
 
+    Resolution mirrors `load_linear_api_key`: when `agent_id` is given, try
+    `GITHUB_PERSONAL_ACCESS_TOKEN_<AGENT_ID>` first, then fall back to the
+    shared `GITHUB_PERSONAL_ACCESS_TOKEN`. Each level checks explicit `env`
+    → process env → `.env` file.
+
     Returns None if the variable is unset and `required` is False (the GitHub
     MCP just won't be available — useful for unit tests). Raises when
-    `required` is True and the var is missing.
+    `required` is True and no source resolves.
     """
+    keys = _candidate_env_keys(agent_id, base=GITHUB_PAT_ENV)
+
+    if env is not None:
+        for key in keys:
+            raw = env.get(key, '').strip()
+            if raw:
+                return SecretStr(raw)
+        if required:
+            raise RuntimeError(_missing_message(agent_id, base=GITHUB_PAT_ENV))
+        return None
+
     config_kwargs: dict[str, Any] = {
         '_env_file': str(env_file if env_file is not None else default_env_file()),
     }
-    secrets = _Secrets(**config_kwargs)
-    value = secrets.github_personal_access_token.get_secret_value().strip()
-    if not value:
+
+    if agent_id is None:
+        secrets = _Secrets(**config_kwargs)
+        value = secrets.github_personal_access_token.get_secret_value().strip()
+        if value:
+            return SecretStr(value)
         if required:
-            raise RuntimeError(
-                f'{GITHUB_PAT_ENV} is not set. Put it in '
-                f'{default_env_file()} (run `albedo init` to seed it).'
-            )
+            raise RuntimeError(_missing_message(None, base=GITHUB_PAT_ENV))
         return None
-    return SecretStr(value)
+
+    resolved = _resolve_dynamic_env(keys, env_file=env_file)
+    if resolved is not None:
+        return SecretStr(resolved)
+    if required:
+        raise RuntimeError(_missing_message(agent_id, base=GITHUB_PAT_ENV))
+    return None
+
+
+def load_bot_identity(
+    env: dict[str, str] | None = None,
+    *,
+    env_file: Path | str | None = None,
+    agent_id: str | None = None,
+) -> tuple[str, str] | None:
+    """Resolve the bot's git author identity (name, email).
+
+    Used by `worktree.ensure_worktree` to set per-worktree
+    `git config user.name/user.email` so commits are attributed to the bot
+    rather than the operator's global git config.
+
+    Both `GITHUB_BOT_NAME` and `GITHUB_BOT_EMAIL` must resolve — otherwise
+    returns `None` and the worktree falls through to the operator's global
+    git config (current behaviour). Per-agent suffixes mirror the per-agent
+    PAT pattern (`GITHUB_BOT_NAME_<AGENT_ID>`, `GITHUB_BOT_EMAIL_<AGENT_ID>`).
+    """
+    name_keys = _candidate_env_keys(agent_id, base=GITHUB_BOT_NAME_ENV)
+    email_keys = _candidate_env_keys(agent_id, base=GITHUB_BOT_EMAIL_ENV)
+
+    if env is not None:
+        name = _first_match(env, name_keys)
+        email = _first_match(env, email_keys)
+    else:
+        name = _resolve_dynamic_env(name_keys, env_file=env_file)
+        email = _resolve_dynamic_env(email_keys, env_file=env_file)
+
+    if not name or not email:
+        return None
+    return (name, email)
+
+
+def _first_match(env: dict[str, str], keys: list[str]) -> str | None:
+    for key in keys:
+        raw = env.get(key, '').strip()
+        if raw:
+            return raw
+    return None

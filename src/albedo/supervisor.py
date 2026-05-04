@@ -601,7 +601,7 @@ def _default_worker_entry(
         silence_stderr=silence_stderr,
     )
     api_key = load_linear_api_key(agent_id=agent_id)
-    github_pat = load_github_pat()
+    github_pat = load_github_pat(agent_id=agent_id)
     with LinearClient(config.linear.api_url, api_key) as client:
         viewer = client.viewer()
         log.info(
