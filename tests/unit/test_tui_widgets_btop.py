@@ -77,6 +77,19 @@ def test_sparkline_low_activity_with_color_override_has_no_red_cells() -> None:
     assert styles == {'cyan'}
 
 
+def _capture_with_links(renderable: object, width: int = 80) -> str:
+    """Capture output preserving ANSI colour escapes for assertions."""
+    console = Console(
+        width=width,
+        force_terminal=True,
+        color_system='truecolor',
+        legacy_windows=False,
+    )
+    with console.capture() as cap:
+        console.print(renderable)
+    return cap.get()
+
+
 # --- bar_gauge -----------------------------------------------------------
 
 
@@ -148,3 +161,40 @@ def test_render_tokens_without_cap_says_no_cap() -> None:
     out = _capture(panel, width=60)
     assert 'no cap' in out
     assert '12.0k' in out
+
+
+def test_render_tokens_low_activity_rate_sparkline_has_no_red_cells() -> None:
+    # AI-79: tokens-panel rate sparkline must opt out of the green→yellow→red
+    # gradient (parity with the linear-panel claims/min and done/min rows from
+    # AI-53). Low non-zero rate counts should render in flat cyan, not red.
+    panel = widgets.render_tokens(
+        daily_tokens=750_000,
+        cap_tokens=2_000_000,
+        rate_history=[0, 1, 2, 1, 0, 2, 1, 0],
+    )
+    rendered = _capture_with_links(panel)
+    assert '\x1b[31m' not in rendered
+    assert '\x1b[91m' not in rendered
+    # ANSI escape for cyan foreground; at least one sparkline cell must use it.
+    assert '\x1b[36m' in rendered
+    assert 'rate' in rendered
+
+
+def test_render_tokens_with_none_rate_history_omits_rate_row() -> None:
+    panel = widgets.render_tokens(
+        daily_tokens=12_000,
+        cap_tokens=0,
+        rate_history=None,
+    )
+    out = _capture(panel, width=60)
+    assert 'rate' not in out
+
+
+def test_render_tokens_with_all_zero_rate_history_omits_rate_row() -> None:
+    panel = widgets.render_tokens(
+        daily_tokens=12_000,
+        cap_tokens=0,
+        rate_history=[0, 0, 0, 0],
+    )
+    out = _capture(panel, width=60)
+    assert 'rate' not in out

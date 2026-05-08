@@ -703,7 +703,7 @@ def render_tokens(
         rate_row.add_column(no_wrap=True, width=14, justify='right')
         rate_row.add_row(
             Text('rate'),
-            sparkline(list(rate_history), width=spark_width),
+            sparkline(list(rate_history), width=spark_width, color='cyan'),
             Text(f'{_humanize_tokens(last)}/min', style='cyan'),
         )
         children.append(rate_row)
