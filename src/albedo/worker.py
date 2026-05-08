@@ -54,6 +54,7 @@ from albedo.dispatch_messages import (
 )
 from albedo.heartbeat import heartbeat_path, touch_heartbeat
 from albedo.linear_client import Comment, Issue, IssueUpdate, LinearClient
+from albedo.paths import repo_prompts_dir
 from albedo.prompt_builder import PromptBuilder, PromptContext
 from albedo.status_writer import (
     PHASE_CLAIMING,
@@ -613,7 +614,7 @@ def run_claimed(
         worktree_path=worktree.path,
     )
 
-    builder = PromptBuilder(prompts_dir)
+    builder = PromptBuilder([repo_prompts_dir(config.repo.path), prompts_dir])
     context = PromptContext(
         agent_id=agent_id,
         issue_id=issue.identifier,
@@ -799,7 +800,7 @@ def run_once(
         worktree_path=worktree.path,
     )
 
-    builder = PromptBuilder(prompts_dir)
+    builder = PromptBuilder([repo_prompts_dir(config.repo.path), prompts_dir])
     context = PromptContext(
         agent_id=agent_id,
         issue_id=issue.identifier,
