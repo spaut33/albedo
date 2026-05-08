@@ -160,7 +160,7 @@ def test_repo_prompts_dir_malformed_template_raises(tmp_path: Path) -> None:
     (project_prompts / 'coder.md').write_text('{{ ghost_var }}', encoding='utf-8')
 
     builder = PromptBuilder([project_prompts, bundled_prompts_dir()])
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(PromptBuildError) as exc:
         builder.build('coder.md', _ctx())
     assert 'ghost_var' in str(exc.value)
 

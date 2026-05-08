@@ -21,6 +21,9 @@ from jinja2 import (
     StrictUndefined,
 )
 from jinja2 import (
+    TemplateError as JinjaTemplateError,
+)
+from jinja2 import (
     TemplateNotFound as JinjaTemplateNotFound,
 )
 
@@ -98,7 +101,12 @@ class PromptBuilder:
             raise PromptBuildError(
                 f'Prompt template {template_name!r} not found in {searched}'
             ) from exc
-        return template.render(**variables)
+        try:
+            return template.render(**variables)
+        except JinjaTemplateError as exc:
+            raise PromptBuildError(
+                f'Failed to render prompt template {template_name!r}: {exc}'
+            ) from exc
 
 
 def _normalize_prompts_dirs(
