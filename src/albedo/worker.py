@@ -1208,6 +1208,28 @@ def _post_spawn_reviewer(
     label_lookup = _resolve_team_labels(linear, issue)
 
     if claude.is_error or verdict is None:
+        if not claude.is_error and re.search(
+            r'no new commits since prior review', summary, re.IGNORECASE
+        ):
+            new_labels = _add_label(issue.label_ids, label_lookup, 'stuck')
+            body = (
+                f'{prefix}reviewer reported no new commits since prior review — '
+                f'escalating to human.\n\n{summary[:2000]}'
+            )
+            linear.add_comment(issue.id, body)
+            target = states.get('Awaiting approval')
+            if target is None:
+                return None, False
+            linear.update_issue(
+                issue.id,
+                IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
+            )
+            log.info(
+                '%s reviewer empty-range loop -> Awaiting approval (stuck)',
+                issue.identifier,
+            )
+            return None, True
+
         reason = (
             'reviewer claude reported an error'
             if claude.is_error
