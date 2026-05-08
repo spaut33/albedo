@@ -248,6 +248,25 @@ def test_sort_states_pushes_unknown_states_to_bottom_alphabetically() -> None:
     ]
 
 
+def test_queue_panel_rate_row_renders_continuous_trace_for_sparse_history() -> None:
+    # AI-80: claims/min and done/min rows must render a baseline glyph
+    # for zero buckets so a sparse low-activity series reads as a
+    # continuous trace rather than scattered specks across blank cells.
+    queue = LinearQueueSnapshot(counts={'Backlog': 1})
+    panel = widgets.render_queue(
+        queue,
+        claims_history=[0, 1, 0, 2, 0, 1, 0, 1],
+        done_history=[0, 0, 1, 0, 2, 0, 1, 0],
+    )
+    text = _capture(panel, width=60)
+    claims_lines = [ln for ln in text.splitlines() if 'claims/min' in ln]
+    done_lines = [ln for ln in text.splitlines() if 'done/min' in ln]
+    assert claims_lines, text
+    assert done_lines, text
+    assert widgets.SPARK_BASELINE in claims_lines[0]
+    assert widgets.SPARK_BASELINE in done_lines[0]
+
+
 def test_queue_panel_low_activity_rate_sparklines_have_no_red_cells() -> None:
     # AI-53: claims/min and done/min auto-normalise to the rolling peak,
     # which previously painted any nonzero idle-session activity red. The

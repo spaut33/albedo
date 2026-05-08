@@ -35,25 +35,38 @@ def test_sparkline_zero_width_returns_empty() -> None:
 
 def test_sparkline_picks_block_glyphs_by_magnitude() -> None:
     text = widgets.sparkline([0, 1, 2, 3, 4, 5, 6, 7], width=8, max_value=7)
-    # Zero → blank; the ladder is mapped via floor(ratio * 7), so the
-    # peak (7/7) lands on the topmost glyph. Intermediate values quantise
-    # to the next glyph up the ladder.
-    assert text.plain[0] == ' '
+    # Zero buckets render as the dim baseline (continuous-trace AC); the
+    # ladder is mapped via floor(ratio * 7), so the peak (7/7) lands on
+    # the topmost glyph. Intermediate values quantise up the ladder.
+    assert text.plain[0] == widgets.SPARK_BASELINE
     assert text.plain[-1] == widgets.SPARK_BLOCKS[-1]
-    # All intermediate cells must be one of the SPARK_BLOCKS glyphs.
     for ch in text.plain[1:]:
         assert ch in widgets.SPARK_BLOCKS
 
 
 def test_sparkline_downsamples_when_input_longer_than_width() -> None:
     text = widgets.sparkline([0, 0, 8, 8], width=2, max_value=8)
-    # Two buckets → averages [0, 8] → blank + full glyph.
-    assert text.plain == ' ' + widgets.SPARK_BLOCKS[-1]
+    # Two buckets → averages [0, 8] → baseline + full glyph (zero buckets
+    # render the dim baseline once any sample in the window is non-zero).
+    assert text.plain == widgets.SPARK_BASELINE + widgets.SPARK_BLOCKS[-1]
 
 
 def test_sparkline_zero_peak_is_all_blanks() -> None:
+    # All-zero input still collapses to spaces — the baseline glyph only
+    # shows up against a non-zero peak so there's something to be a
+    # baseline of.
     text = widgets.sparkline([0, 0, 0], width=4)
     assert text.plain == '    '
+
+
+def test_sparkline_left_pad_uses_literal_spaces_for_short_input() -> None:
+    # Right-anchoring relies on the left-pad rendering as literal spaces
+    # so subsequent cells line up at the right edge of the column, even
+    # though interior zero buckets now render the baseline glyph.
+    text = widgets.sparkline([1, 2, 3], width=8, max_value=3)
+    assert text.plain[:5] == '     '
+    for ch in text.plain[5:]:
+        assert ch in widgets.SPARK_BLOCKS
 
 
 def test_sparkline_color_override_applies_flat_style_to_every_cell() -> None:
@@ -70,11 +83,26 @@ def test_sparkline_color_override_applies_flat_style_to_every_cell() -> None:
 def test_sparkline_low_activity_with_color_override_has_no_red_cells() -> None:
     # Mirrors the linear-panel claims/min and done/min case from AI-53:
     # values capped at 2 over the window must not render red even though
-    # the rolling peak hits the gradient's red threshold.
+    # the rolling peak hits the gradient's red threshold. AI-80 extends
+    # this — interior zeros must render as the baseline glyph rather than
+    # literal spaces so the trace stays continuous.
     text = widgets.sparkline([0, 1, 2, 1, 0, 2, 1, 0], width=8, color='cyan')
     styles = {span.style for span in text.spans}
     assert 'red' not in styles
-    assert styles == {'cyan'}
+    assert 'yellow' not in styles
+    assert 'green' not in styles
+    assert 'cyan' in styles
+    assert ' ' not in text.plain
+
+
+def test_sparkline_sparse_series_renders_continuous_trace() -> None:
+    # AI-80 AC: with a sparse interior (e.g. [0, 1, 0, 2, 0, 1]) and a
+    # non-None color, every data position must render a glyph rather than
+    # collapsing zero buckets to literal spaces.
+    text = widgets.sparkline([0, 1, 0, 2, 0, 1], width=6, color='cyan')
+    assert ' ' not in text.plain
+    allowed = {widgets.SPARK_BASELINE, *widgets.SPARK_BLOCKS}
+    assert all(ch in allowed for ch in text.plain)
 
 
 def _capture_with_links(renderable: object, width: int = 80) -> str:
@@ -198,3 +226,18 @@ def test_render_tokens_with_all_zero_rate_history_omits_rate_row() -> None:
     )
     out = _capture(panel, width=60)
     assert 'rate' not in out
+
+
+def test_render_tokens_rate_row_renders_continuous_trace_for_sparse_history() -> None:
+    # AI-80: the tokens-panel rate sparkline must show a baseline glyph
+    # for zero buckets so a low-activity series reads as a continuous
+    # trace rather than scattered specks.
+    panel = widgets.render_tokens(
+        daily_tokens=12_000,
+        cap_tokens=0,
+        rate_history=[0, 1, 0, 2, 0, 1, 0, 1],
+    )
+    out = _capture(panel, width=60)
+    rate_lines = [ln for ln in out.splitlines() if 'rate' in ln]
+    assert rate_lines, out
+    assert widgets.SPARK_BASELINE in rate_lines[0]
