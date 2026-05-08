@@ -64,6 +64,7 @@ class PromptContext:
     pr_url: str | None = None
     user_comments_block: str = ''
     attachments_block: str = ''
+    reviewer_feedback_block: str = ''
 
 
 class PromptBuilder:
@@ -142,6 +143,7 @@ def _context_to_variables(context: PromptContext) -> dict[str, object]:
         'pr_url': context.pr_url or '',
         'user_comments_block': context.user_comments_block,
         'attachments_block': context.attachments_block,
+        'reviewer_feedback_block': context.reviewer_feedback_block,
     }
 
 

@@ -4,7 +4,14 @@ You implement the issue, push the branch, and open a PR. The orchestrator
 itself will move the Linear issue and post comments — you do not need to
 touch Linear.
 
-## Pre-flight
+{% if reviewer_feedback_block %}## Reviewer feedback
+
+The most recent reviewer comment on this issue is reproduced below. Treat it
+as authoritative on what to fix this iteration:
+
+{{ reviewer_feedback_block }}
+
+{% endif %}## Pre-flight
 
 1. Confirm `pwd` is `{{ worktree_path }}`.
 2. `git fetch origin && git rebase origin/{{ base_branch }}` to actualize the

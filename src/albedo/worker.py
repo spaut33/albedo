@@ -40,7 +40,9 @@ from albedo.claim_manifest import (
 from albedo.claude_runner import ClaudeRunResult, spawn_claude
 from albedo.comment_filter import (
     filter_user_comments,
+    format_reviewer_feedback_block,
     format_user_comments_block,
+    latest_reviewer_feedback,
 )
 from albedo.config import OrchestratorConfig, load_bot_identity
 from albedo.dispatch import RoleSpec, UnknownColumnError, dispatch
@@ -591,7 +593,9 @@ def run_claimed(
         pr_url_for_prompt = find_pr_url_in_comments(raw_comments)
 
     if (
-        config.features.user_comments_in_prompt or config.attachments.enabled
+        config.features.user_comments_in_prompt
+        or config.attachments.enabled
+        or role.role == 'CODER'
     ) and raw_comments is None:
         try:
             raw_comments = linear.list_comments(issue.id)
@@ -605,6 +609,13 @@ def run_claimed(
         )
     else:
         user_comments_block = ''
+
+    if role.role == 'CODER':
+        reviewer_feedback_block = format_reviewer_feedback_block(
+            latest_reviewer_feedback(raw_comments or [], bot_user_ids)
+        )
+    else:
+        reviewer_feedback_block = ''
 
     attachments_block = _build_attachments_block(
         config=config,
@@ -636,6 +647,7 @@ def run_claimed(
         pr_url=pr_url_for_prompt,
         user_comments_block=user_comments_block,
         attachments_block=attachments_block,
+        reviewer_feedback_block=reviewer_feedback_block,
     )
     prompt = builder.build(role.prompt_template, context)
 
@@ -778,7 +790,11 @@ def run_once(
     )
 
     raw_comments: list[Comment] = []
-    if config.features.user_comments_in_prompt or config.attachments.enabled:
+    if (
+        config.features.user_comments_in_prompt
+        or config.attachments.enabled
+        or role.role == 'CODER'
+    ):
         try:
             raw_comments = linear.list_comments(issue.id)
         except Exception as exc:
@@ -791,6 +807,13 @@ def run_once(
         )
     else:
         user_comments_block = ''
+
+    if role.role == 'CODER':
+        reviewer_feedback_block = format_reviewer_feedback_block(
+            latest_reviewer_feedback(raw_comments, bot_user_ids)
+        )
+    else:
+        reviewer_feedback_block = ''
 
     attachments_block = _build_attachments_block(
         config=config,
@@ -821,6 +844,7 @@ def run_once(
         attempts=attempts_from_labels(issue.label_names),
         user_comments_block=user_comments_block,
         attachments_block=attachments_block,
+        reviewer_feedback_block=reviewer_feedback_block,
     )
     prompt = builder.build(role.prompt_template, context)
 
