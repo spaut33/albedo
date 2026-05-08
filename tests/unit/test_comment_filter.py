@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from albedo.comment_filter import (
     filter_user_comments,
+    format_reviewer_feedback_block,
     format_user_comments_block,
+    latest_reviewer_feedback,
 )
 from albedo.linear_client import Comment
 
@@ -78,3 +80,60 @@ def test_format_block_skips_empty_bodies() -> None:
 
 def test_format_block_returns_empty_for_no_comments() -> None:
     assert format_user_comments_block([]) == ''
+
+
+def test_latest_reviewer_feedback_picks_newest_matching_bot_comment() -> None:
+    comments = [
+        _c('1', '**agent-1**: REVIEW REQUEST_CHANGES (attempts=1/5).\n\nold', 'bot'),
+        _c('2', 'human asking a question', 'human-1'),
+        _c('3', '**agent-2**: REVIEW REQUEST_CHANGES (attempts=2/5).\n\nnew', 'bot'),
+        _c('4', 'another human reply', 'human-1'),
+    ]
+    latest = latest_reviewer_feedback(comments, frozenset({'bot'}))
+    assert latest is not None
+    assert latest.id == '3'
+
+
+def test_latest_reviewer_feedback_accepts_approve_and_blocked() -> None:
+    approve = _c('a', '**agent-1**: REVIEW APPROVE\n\nlooks good', 'bot')
+    blocked = _c('b', '**agent-2**: BLOCKED: no PR url found.\n\n```\n...\n```', 'bot')
+    assert latest_reviewer_feedback([approve], frozenset()) is approve
+    assert latest_reviewer_feedback([blocked], frozenset()) is blocked
+
+
+def test_latest_reviewer_feedback_ignores_user_comments() -> None:
+    comments = [
+        _c('1', '**agent-1**: REVIEW REQUEST_CHANGES.\n\ndetails', 'bot'),
+        _c('2', 'REVIEW REQUEST_CHANGES — fake from a human', 'human-1'),
+    ]
+    latest = latest_reviewer_feedback(comments, frozenset({'bot'}))
+    assert latest is not None
+    assert latest.id == '1'
+
+
+def test_latest_reviewer_feedback_ignores_non_verdict_bot_comments() -> None:
+    comments = [
+        _c('1', '**agent-1**: PR: https://github.com/x/y/pull/3', 'bot'),
+        _c('2', '**housekeeping**: Decomposition approved', 'bot'),
+    ]
+    assert latest_reviewer_feedback(comments, frozenset({'bot'})) is None
+
+
+def test_latest_reviewer_feedback_empty_list() -> None:
+    assert latest_reviewer_feedback([], frozenset()) is None
+
+
+def test_format_reviewer_feedback_block_quotes_body() -> None:
+    comment = _c(
+        '1',
+        '**agent-2**: REVIEW REQUEST_CHANGES (attempts=1/5).\n\nfix the regex',
+        'bot',
+    )
+    block = format_reviewer_feedback_block(comment)
+    assert block.startswith('> **agent-2**: REVIEW REQUEST_CHANGES')
+    assert '> fix the regex' in block
+
+
+def test_format_reviewer_feedback_block_handles_none_and_empty() -> None:
+    assert format_reviewer_feedback_block(None) == ''
+    assert format_reviewer_feedback_block(_c('1', '   ', 'bot')) == ''

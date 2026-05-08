@@ -22,6 +22,10 @@ from albedo.linear_client import Comment
 
 AGENT_PREFIX_RE = re.compile(r'^\s*\*\*(?:agent-\d+|housekeeping)\*\*\s*:')
 
+REVIEWER_VERDICT_RE = re.compile(
+    r'^\s*\*\*agent-\d+\*\*\s*:\s*(?:REVIEW\s+(?:APPROVE|REQUEST_CHANGES)|BLOCKED:)'
+)
+
 
 def is_bot_comment(comment: Comment, bot_user_ids: frozenset[str]) -> bool:
     """True if the comment was posted by an orchestrator-controlled token."""
@@ -36,6 +40,40 @@ def filter_user_comments(
 ) -> list[Comment]:
     """Return only human-authored comments, preserving input order."""
     return [c for c in comments if not is_bot_comment(c, bot_user_ids)]
+
+
+def latest_reviewer_feedback(
+    comments: Iterable[Comment],
+    bot_user_ids: frozenset[str],
+) -> Comment | None:
+    """Return the most recent bot-authored reviewer-verdict comment, or None.
+
+    `comments` is expected newest-last (the order returned by
+    `LinearClient.list_comments`). Matches comments whose body opens with
+    `**agent-N**:` followed by `REVIEW APPROVE`, `REVIEW REQUEST_CHANGES`,
+    or `BLOCKED:` — the three shapes `_post_spawn_reviewer` writes.
+    """
+    for comment in reversed(list(comments)):
+        if not is_bot_comment(comment, bot_user_ids):
+            continue
+        if REVIEWER_VERDICT_RE.match(comment.body or ''):
+            return comment
+    return None
+
+
+def format_reviewer_feedback_block(comment: Comment | None) -> str:
+    """Render a reviewer-feedback markdown block, or empty string if none.
+
+    Quotes the comment body verbatim as a blockquote so the prompt template
+    can drop it into a `## Reviewer feedback` section.
+    """
+    if comment is None:
+        return ''
+    body = (comment.body or '').strip()
+    if not body:
+        return ''
+    quoted = '\n'.join(f'> {line}' if line else '>' for line in body.splitlines())
+    return quoted
 
 
 def format_user_comments_block(comments: Iterable[Comment]) -> str:

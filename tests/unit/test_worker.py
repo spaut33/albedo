@@ -23,7 +23,7 @@ from albedo.dispatch_messages import (
     DispatchQueue,
     ResultQueue,
 )
-from albedo.linear_client import IncomingRelation, Issue, IssueUpdate
+from albedo.linear_client import Comment, IncomingRelation, Issue, IssueUpdate
 from albedo.worker import (
     acceptance_criteria_from_description,
     attempts_from_labels,
@@ -540,6 +540,139 @@ def test_run_once_happy_path_moves_to_review_and_comments(
     assert 'AI-5' in prompt_text
     assert 'CODER' in prompt_text
     assert 'Filter works' in prompt_text
+
+
+def test_run_once_coder_renders_latest_reviewer_feedback_block(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CODER picks up an issue with prior bot reviewer comments — the
+    rendered prompt must surface the most recent verdict verbatim under
+    a `## Reviewer feedback` heading.
+    """
+    captured: list[Mapping[str, object]] = []
+    _stub_spawn(monkeypatch, captured=captured)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+    fake.linear_comments = [
+        Comment(
+            id='c-old',
+            body='**agent-1**: REVIEW REQUEST_CHANGES (attempts=1/3).\n\nold note',
+            author_id='bot',
+        ),
+        Comment(
+            id='c-user',
+            body='please make sure the regex is anchored',
+            author_id='human-1',
+        ),
+        Comment(
+            id='c-new',
+            body=(
+                '**agent-2**: REVIEW REQUEST_CHANGES (attempts=2/3).\n\n'
+                'fix the off-by-one in parser'
+            ),
+            author_id='bot',
+        ),
+    ]
+
+    run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        cli='claude',
+        fetch=False,
+    )
+
+    prompt_text = cast('str', captured[0]['prompt'])
+    assert '## Reviewer feedback' in prompt_text
+    assert 'fix the off-by-one in parser' in prompt_text
+    # Picks the *newest* matching bot comment, not the older one.
+    assert 'old note' not in prompt_text
+
+
+def test_run_once_coder_omits_reviewer_feedback_block_when_none(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh Backlog with no prior bot verdict — the prompt must not
+    include a `## Reviewer feedback` section at all.
+    """
+    captured: list[Mapping[str, object]] = []
+    _stub_spawn(monkeypatch, captured=captured)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+    fake.linear_comments = []  # fresh Backlog
+
+    run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        cli='claude',
+        fetch=False,
+    )
+
+    prompt_text = cast('str', captured[0]['prompt'])
+    assert '## Reviewer feedback' not in prompt_text
+
+
+def test_run_claimed_reviewer_prompt_omits_reviewer_feedback_block(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REVIEWER role must never see the reviewer-feedback block, even
+    when matching bot verdicts already exist on the issue.
+    """
+    captured: list[Mapping[str, object]] = []
+
+    def fake_spawn(prompt: str, **_kwargs: object) -> ClaudeRunResult:
+        captured.append({'prompt': prompt})
+        return ClaudeRunResult(
+            is_error=False,
+            exit_code=0,
+            result_text='looks good\n\nVERDICT: APPROVE',
+            total_cost_usd=0.0,
+            usage={},
+        )
+
+    monkeypatch.setattr(worker_mod, 'spawn_claude', fake_spawn)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_review_issue())
+    fake.linear_comments = [
+        Comment(
+            id='c-pr',
+            body='**agent-1**: PR: https://github.com/me/sample/pull/3',
+            author_id='bot',
+        ),
+        Comment(
+            id='c-prev',
+            body='**agent-1**: REVIEW REQUEST_CHANGES (attempts=1/3).\n\nprevious',
+            author_id='bot',
+        ),
+    ]
+
+    worker_mod.run_claimed(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue=fake._issue,  # type: ignore[attr-defined]
+        agent_id='2',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        github_pat=None,
+        cli='claude',
+    )
+
+    prompt_text = cast('str', captured[0]['prompt'])
+    assert '## Reviewer feedback' not in prompt_text
+    assert 'previous' not in prompt_text
 
 
 def test_run_once_blocks_when_no_pr_url(
