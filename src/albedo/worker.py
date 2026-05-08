@@ -75,7 +75,12 @@ from albedo.usage_limit import (
     parse_reset_time,
     record_pause,
 )
-from albedo.worktree import WorktreeInfo, branch_for_issue, ensure_worktree
+from albedo.worktree import (
+    WorktreeInfo,
+    branch_for_issue,
+    default_credential_helper_command,
+    ensure_worktree,
+)
 
 log = logging.getLogger(__name__)
 
@@ -570,6 +575,7 @@ def run_claimed(
         issue.identifier,
         config.repo.base_branch,
         bot_identity=load_bot_identity(agent_id=agent_id),
+        credential_helper_command=default_credential_helper_command(),
     )
     if status_writer is not None:
         status_writer.set_issue(
@@ -787,6 +793,7 @@ def run_once(
         config.repo.base_branch,
         fetch=fetch,
         bot_identity=load_bot_identity(agent_id=agent_id),
+        credential_helper_command=default_credential_helper_command(),
     )
 
     raw_comments: list[Comment] = []

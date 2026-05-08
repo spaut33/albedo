@@ -14,8 +14,10 @@ from pathlib import Path
 import pytest
 
 from albedo.worktree import (
+    CREDENTIAL_URL_SCOPE,
     WorktreeError,
     branch_for_issue,
+    default_credential_helper_command,
     ensure_worktree,
     list_worktrees,
     remove_worktree,
@@ -208,6 +210,164 @@ def test_list_worktrees_returns_only_task_worktrees(repo: Path, tmp_path: Path) 
     assert 'task/ai-5' in branches
     assert 'task/ai-6' in branches
     assert all(w.branch.startswith('task/') for w in listed)
+
+
+FIXTURE_PAT = 'ghp_fixturetokenAAAAAAAAAAAAAAAAAAAAAAAA'
+
+
+def _write_albedo_env(home: Path, body: str) -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    (home / '.env').write_text(body, encoding='utf-8')
+
+
+def test_credential_helper_keeps_pat_out_of_git_config(
+    repo: Path, tmp_path: Path
+) -> None:
+    """AC: `.git/config` must not contain a token-shaped string for a fixture PAT."""
+    wt_root = tmp_path / 'worktrees'
+    info = ensure_worktree(
+        repo,
+        wt_root,
+        'sample',
+        'AI-70',
+        'main',
+        credential_helper_command=default_credential_helper_command(),
+    )
+
+    listed = subprocess.run(
+        ['git', '-C', str(info.path), 'config', '--local', '--list'],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert FIXTURE_PAT not in listed
+    # Spot-check the on-disk worktree config file (newer git layout).
+    git_config = repo / '.git' / 'worktrees' / info.path.name / 'config.worktree'
+    if git_config.exists():
+        assert FIXTURE_PAT not in git_config.read_text(encoding='utf-8')
+
+    helper_value = subprocess.run(
+        [
+            'git',
+            '-C',
+            str(info.path),
+            'config',
+            '--local',
+            '--get',
+            f'credential.{CREDENTIAL_URL_SCOPE}.helper',
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert helper_value.startswith('!')
+    assert 'albedo.git_credential' in helper_value
+    assert FIXTURE_PAT not in helper_value
+
+    username = _local_git_config(
+        info.path, f'credential.{CREDENTIAL_URL_SCOPE}.username'
+    )
+    assert username == 'x-access-token'
+
+    # Also grep the entire worktree tree (working dir + .git metadata) for the
+    # token value — none of it should contain the PAT.
+    for path in info.path.rglob('*'):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (UnicodeDecodeError, OSError):
+            continue
+        assert FIXTURE_PAT not in text, f'PAT leaked into {path}'
+
+
+def test_credential_helper_replaces_prior_value_on_reuse(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Re-provisioning with a new helper command must not stack helpers."""
+    wt_root = tmp_path / 'worktrees'
+    info = ensure_worktree(
+        repo,
+        wt_root,
+        'sample',
+        'AI-70',
+        'main',
+        credential_helper_command='!/old/python -m albedo.git_credential',
+    )
+    ensure_worktree(
+        repo,
+        wt_root,
+        'sample',
+        'AI-70',
+        'main',
+        fetch=False,
+        credential_helper_command='!/new/python -m albedo.git_credential',
+    )
+    values = subprocess.run(
+        [
+            'git',
+            '-C',
+            str(info.path),
+            'config',
+            '--local',
+            '--get-all',
+            f'credential.{CREDENTIAL_URL_SCOPE}.helper',
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert values == ['!/new/python -m albedo.git_credential']
+
+
+def test_credential_helper_omitted_when_command_is_none(
+    repo: Path, tmp_path: Path
+) -> None:
+    wt_root = tmp_path / 'worktrees'
+    info = ensure_worktree(repo, wt_root, 'sample', 'AI-70', 'main')
+    assert (
+        _local_git_config(info.path, f'credential.{CREDENTIAL_URL_SCOPE}.helper')
+        is None
+    )
+
+
+def test_credential_helper_resolves_pat_via_git_credential_fill(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: git invokes the helper and gets back the PAT from `.env`.
+
+    `git credential fill` exercises the same credential-protocol path as
+    `git push/fetch/pull` against an HTTPS remote — without needing an actual
+    HTTP server. If git can read username/password through this channel, real
+    network ops will too.
+    """
+    home = tmp_path / 'albedo-home'
+    _write_albedo_env(home, f'GITHUB_PERSONAL_ACCESS_TOKEN={FIXTURE_PAT}\n')
+    monkeypatch.setenv('ALBEDO_HOME', str(home))
+    # Strip any operator PAT from the test env so the helper falls through to .env.
+    monkeypatch.delenv('GITHUB_PERSONAL_ACCESS_TOKEN', raising=False)
+
+    wt_root = tmp_path / 'worktrees'
+    info = ensure_worktree(
+        repo,
+        wt_root,
+        'sample',
+        'AI-70',
+        'main',
+        credential_helper_command=default_credential_helper_command(),
+    )
+
+    fill = subprocess.run(
+        ['git', '-C', str(info.path), 'credential', 'fill'],
+        input='protocol=https\nhost=github.com\n\n',
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    out = fill.stdout
+    assert 'username=x-access-token' in out
+    assert f'password={FIXTURE_PAT}' in out
 
 
 def test_run_git_timeout_raises(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
