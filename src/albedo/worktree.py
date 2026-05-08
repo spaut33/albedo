@@ -7,11 +7,28 @@ reaches Done or Cancelled.
 
 from __future__ import annotations
 
+import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_TIMEOUT_SECONDS = 60
+
+# URL scope under which the per-worktree credential helper is registered.
+# Restricting to https://github.com keeps the helper out of the way for any
+# other remote the operator might add (e.g. an SSH origin or a private gitlab).
+CREDENTIAL_URL_SCOPE = 'https://github.com'
+
+
+def default_credential_helper_command() -> str:
+    """Build the `credential.helper` value that runs the bundled albedo helper.
+
+    Uses the running interpreter (`sys.executable`) so the spawned helper picks
+    up the same albedo install. The `!`-prefix tells git to invoke this through
+    `sh -c`, which lets us pass an absolute interpreter path with `-m`.
+    """
+    return f'!{shlex.quote(sys.executable)} -m albedo.git_credential'
 
 
 class WorktreeError(RuntimeError):
@@ -44,6 +61,7 @@ def ensure_worktree(
     fetch: bool = True,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     bot_identity: tuple[str, str] | None = None,
+    credential_helper_command: str | None = None,
 ) -> WorktreeInfo:
     """Create or reuse the worktree for a task.
 
@@ -59,6 +77,13 @@ def ensure_worktree(
     git config. Re-applied on every call so a config change takes effect on
     the next task without manual cleanup of existing worktrees.
 
+    When `credential_helper_command` is provided, it is registered as the
+    `credential.{CREDENTIAL_URL_SCOPE}.helper` for this worktree so HTTPS
+    `git push/pull/fetch` against github.com authenticate via the helper
+    rather than via an embedded token. The helper string itself is stored in
+    `.git/config` (no PAT material is). Use `default_credential_helper_command()`
+    for the bundled albedo helper.
+
     Raises `WorktreeError` if git refuses (path occupied by something else,
     fetch fails, etc.).
     """
@@ -73,6 +98,9 @@ def ensure_worktree(
                 f'expected {branch!r}'
             )
         _apply_bot_identity(target, bot_identity, timeout_seconds=timeout_seconds)
+        _apply_credential_helper(
+            target, credential_helper_command, timeout_seconds=timeout_seconds
+        )
         return WorktreeInfo(path=target, branch=branch, base_branch=base_branch)
 
     # Drop dangling worktree refs (e.g. dir was deleted manually) so the next
@@ -104,6 +132,9 @@ def ensure_worktree(
             timeout_seconds=timeout_seconds,
         )
     _apply_bot_identity(target, bot_identity, timeout_seconds=timeout_seconds)
+    _apply_credential_helper(
+        target, credential_helper_command, timeout_seconds=timeout_seconds
+    )
     return WorktreeInfo(path=target, branch=branch, base_branch=base_branch)
 
 
@@ -123,6 +154,38 @@ def _apply_bot_identity(
     name, email = identity
     _run_git(target, ['config', 'user.name', name], timeout_seconds=timeout_seconds)
     _run_git(target, ['config', 'user.email', email], timeout_seconds=timeout_seconds)
+
+
+def _apply_credential_helper(
+    target: Path,
+    helper_command: str | None,
+    *,
+    timeout_seconds: int,
+) -> None:
+    """Register a `credential.helper` for the worktree, scoped to github.com.
+
+    `--replace-all` overwrites any prior values (e.g. from a previous albedo
+    install whose `sys.executable` path has since changed) so re-provisioning
+    a worktree never accumulates stale helper entries. Username is pinned to
+    `x-access-token` — GitHub's accepted username for token-based HTTPS auth.
+
+    No-op when `helper_command is None` so legacy callers and tests that don't
+    care about credential handling are unaffected.
+    """
+    if helper_command is None:
+        return
+    helper_key = f'credential.{CREDENTIAL_URL_SCOPE}.helper'
+    username_key = f'credential.{CREDENTIAL_URL_SCOPE}.username'
+    _run_git(
+        target,
+        ['config', '--local', '--replace-all', helper_key, helper_command],
+        timeout_seconds=timeout_seconds,
+    )
+    _run_git(
+        target,
+        ['config', '--local', username_key, 'x-access-token'],
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _branch_exists(repo_path: Path, branch: str, *, timeout_seconds: int) -> bool:
