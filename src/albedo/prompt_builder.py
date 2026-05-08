@@ -64,14 +64,21 @@ class PromptContext:
 
 
 class PromptBuilder:
-    """Render orchestrator prompts from `prompts/` Jinja templates."""
+    """Render orchestrator prompts from `prompts/` Jinja templates.
 
-    def __init__(self, prompts_dir: Path | str | None = None) -> None:
-        self._prompts_dir = (
-            Path(prompts_dir) if prompts_dir is not None else default_prompts_dir()
-        )
+    `prompts_dir` accepts either a single directory (back-compat) or an
+    ordered iterable of directories. With multiple dirs, Jinja's
+    `FileSystemLoader` picks the first match, so callers should pass
+    project-local first and global fallback second.
+    """
+
+    def __init__(
+        self,
+        prompts_dir: Path | str | Iterable[Path | str] | None = None,
+    ) -> None:
+        self._prompts_dirs = _normalize_prompts_dirs(prompts_dir)
         self._env = Environment(
-            loader=FileSystemLoader(str(self._prompts_dir)),
+            loader=FileSystemLoader([str(p) for p in self._prompts_dirs]),
             undefined=StrictUndefined,
             keep_trailing_newline=True,
             autoescape=False,
@@ -87,10 +94,21 @@ class PromptBuilder:
         try:
             template = self._env.get_template(template_name)
         except JinjaTemplateNotFound as exc:
+            searched = ', '.join(str(p) for p in self._prompts_dirs)
             raise PromptBuildError(
-                f'Prompt template {template_name!r} not found in {self._prompts_dir}'
+                f'Prompt template {template_name!r} not found in {searched}'
             ) from exc
         return template.render(**variables)
+
+
+def _normalize_prompts_dirs(
+    prompts_dir: Path | str | Iterable[Path | str] | None,
+) -> tuple[Path, ...]:
+    if prompts_dir is None:
+        return (default_prompts_dir(),)
+    if isinstance(prompts_dir, (str, Path)):
+        return (Path(prompts_dir),)
+    return tuple(Path(p) for p in prompts_dir)
 
 
 def _context_to_variables(context: PromptContext) -> dict[str, object]:

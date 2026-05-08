@@ -68,5 +68,10 @@ def prompts_dir() -> Path:
     return albedo_home() / 'prompts'
 
 
+def repo_prompts_dir(repo_root: Path) -> Path:
+    """Per-repo prompts override directory: `<repo_root>/.albedo/prompts`."""
+    return repo_root / '.albedo' / 'prompts'
+
+
 def mcp_config_path() -> Path:
     return albedo_home() / 'mcp-servers.json'

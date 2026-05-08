@@ -94,6 +94,37 @@ def test_missing_template_raises_typed_error(tmp_path: Path) -> None:
         builder.build('does-not-exist.md', _ctx())
 
 
+def test_search_path_project_local_overrides_global(tmp_path: Path) -> None:
+    (tmp_path / 'coder.md').write_text('LOCAL CODER {{ issue_id }}', encoding='utf-8')
+    builder = PromptBuilder(prompts_dir=[tmp_path, bundled_prompts_dir()])
+    rendered = builder.build('coder.md', _ctx())
+    assert 'LOCAL CODER AI-5' in rendered
+
+
+def test_search_path_falls_back_to_global_when_local_missing_template(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / 'coder.md').write_text('LOCAL CODER {{ issue_id }}', encoding='utf-8')
+    builder = PromptBuilder(prompts_dir=[tmp_path, bundled_prompts_dir()])
+    rendered = builder.build('coder.md', _ctx())
+    assert 'LOCAL CODER AI-5' in rendered
+    assert 'agent-1' in rendered  # rendered from global common-prefix.md.tmpl
+
+
+def test_search_path_raises_when_template_missing_in_all_dirs(
+    tmp_path: Path,
+) -> None:
+    local = tmp_path / 'local'
+    global_ = tmp_path / 'global'
+    local.mkdir()
+    global_.mkdir()
+    (local / 'common-prefix.md.tmpl').write_text('hi', encoding='utf-8')
+    (global_ / 'common-prefix.md.tmpl').write_text('hi', encoding='utf-8')
+    builder = PromptBuilder(prompts_dir=[local, global_])
+    with pytest.raises(PromptBuildError, match='not found'):
+        builder.build('missing-role.md', _ctx())
+
+
 def test_common_prefix_template_constant() -> None:
     assert COMMON_PREFIX_TEMPLATE == 'common-prefix.md.tmpl'
 
