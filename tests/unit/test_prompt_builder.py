@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from albedo.paths import repo_prompts_dir
 from albedo.prompt_builder import (
     COMMON_PREFIX_TEMPLATE,
     PromptBuilder,
@@ -127,6 +128,41 @@ def test_search_path_raises_when_template_missing_in_all_dirs(
 
 def test_common_prefix_template_constant() -> None:
     assert COMMON_PREFIX_TEMPLATE == 'common-prefix.md.tmpl'
+
+
+def test_repo_prompts_dir_overrides_bundled_coder(tmp_path: Path) -> None:
+    sentinel = 'SENTINEL_LOCAL_CODER for {{ issue_id }}'
+    project_prompts = repo_prompts_dir(tmp_path)
+    project_prompts.mkdir(parents=True)
+    (project_prompts / 'coder.md').write_text(sentinel, encoding='utf-8')
+
+    builder = PromptBuilder([project_prompts, bundled_prompts_dir()])
+    rendered = builder.build('coder.md', _ctx())
+
+    assert 'SENTINEL_LOCAL_CODER for AI-5' in rendered
+    assert 'You implement the issue, push the branch' not in rendered
+
+
+def test_repo_prompts_dir_absent_falls_back_to_bundled(tmp_path: Path) -> None:
+    project_prompts = repo_prompts_dir(tmp_path)
+    assert not project_prompts.exists()
+
+    builder = PromptBuilder([project_prompts, bundled_prompts_dir()])
+    rendered = builder.build('coder.md', _ctx())
+
+    assert 'CODER' in rendered
+    assert 'AI-5' in rendered
+
+
+def test_repo_prompts_dir_malformed_template_raises(tmp_path: Path) -> None:
+    project_prompts = repo_prompts_dir(tmp_path)
+    project_prompts.mkdir(parents=True)
+    (project_prompts / 'coder.md').write_text('{{ ghost_var }}', encoding='utf-8')
+
+    builder = PromptBuilder([project_prompts, bundled_prompts_dir()])
+    with pytest.raises(Exception) as exc:
+        builder.build('coder.md', _ctx())
+    assert 'ghost_var' in str(exc.value)
 
 
 def test_attachments_block_omitted_when_empty() -> None:
