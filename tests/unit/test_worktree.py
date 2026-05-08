@@ -221,9 +221,19 @@ def _write_albedo_env(home: Path, body: str) -> None:
 
 
 def test_credential_helper_keeps_pat_out_of_git_config(
-    repo: Path, tmp_path: Path
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC: `.git/config` must not contain a token-shaped string for a fixture PAT."""
+    """AC: `.git/config` must not contain a token-shaped string for a fixture PAT.
+
+    Introduces FIXTURE_PAT into the system under test (via `$ALBEDO_HOME/.env`)
+    and forces git to invoke the helper through `git credential fill` before
+    scanning. Without that, the leak assertions would be vacuously true.
+    """
+    home = tmp_path / 'albedo-home'
+    _write_albedo_env(home, f'GITHUB_PERSONAL_ACCESS_TOKEN={FIXTURE_PAT}\n')
+    monkeypatch.setenv('ALBEDO_HOME', str(home))
+    monkeypatch.delenv('GITHUB_PERSONAL_ACCESS_TOKEN', raising=False)
+
     wt_root = tmp_path / 'worktrees'
     info = ensure_worktree(
         repo,
@@ -233,6 +243,16 @@ def test_credential_helper_keeps_pat_out_of_git_config(
         'main',
         credential_helper_command=default_credential_helper_command(),
     )
+
+    fill = subprocess.run(
+        ['git', '-C', str(info.path), 'credential', 'fill'],
+        input='protocol=https\nhost=github.com\n\n',
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert f'password={FIXTURE_PAT}' in fill.stdout
 
     listed = subprocess.run(
         ['git', '-C', str(info.path), 'config', '--local', '--list'],
@@ -269,8 +289,6 @@ def test_credential_helper_keeps_pat_out_of_git_config(
     )
     assert username == 'x-access-token'
 
-    # Also grep the entire worktree tree (working dir + .git metadata) for the
-    # token value — none of it should contain the PAT.
     for path in info.path.rglob('*'):
         if not path.is_file():
             continue
