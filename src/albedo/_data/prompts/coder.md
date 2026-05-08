@@ -41,6 +41,23 @@ as authoritative on what to fix this iteration:
      `Grep("def filter_handler")` or `Grep("class Router")`). If a
      symbol the architect cited cannot be found, that's a grounding
      failure — BLOCK with an explanation rather than inventing one.
+5. **Pull line-anchored reviewer feedback from the existing PR, if any.**
+   Check via the GitHub MCP whether a PR for `{{ branch }}` against
+   `{{ base_branch }}` already exists.
+   - **If no PR exists yet** (first CODER pass on a fresh issue), skip
+     this step entirely — do not call the GitHub MCP review endpoints.
+   - **If a PR already exists**, call
+     `mcp__github__get_pull_request_reviews` for that PR. For each
+     review whose body contains a `VERDICT:` marker (i.e. a line matching
+     `^\s*VERDICT:\s*(APPROVE|REQUEST_CHANGES)\b` — these are prior
+     reviewer passes; the reviewer always posts with `event: COMMENT`,
+     never `APPROVED` or `CHANGES_REQUESTED`), call
+     `mcp__github__get_pull_request_comments` to fetch that review's
+     line-anchored sub-comments. Treat the resulting `(file path, line,
+     body)` tuples as the canonical to-fix list for this iteration,
+     alongside any reviewer-feedback block reproduced above. The
+     line-anchored sub-comments are the most actionable feedback —
+     address them directly at the cited file and line.
 
 ## Implementation
 
