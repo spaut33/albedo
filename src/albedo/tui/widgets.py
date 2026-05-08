@@ -60,6 +60,7 @@ PHASE_COLORS: dict[str, str] = {
 
 
 SPARK_BLOCKS: tuple[str, ...] = ('⣀', '⣄', '⣤', '⣦', '⣶', '⣷', '⣾', '⣿')
+SPARK_BASELINE: str = '⠤'
 GAUGE_FILLED = '█'
 GAUGE_HALF = '▒'
 GAUGE_EMPTY = '░'
@@ -104,17 +105,26 @@ def sparkline(
 ) -> Text:
     """Render a Unicode-block sparkline of `values` into a `width`-wide Text.
 
-    Output is always exactly `width` cells: shorter inputs are left-padded
-    with blanks so the newest sample stays anchored to the right edge.
-    Empty / all-zero input renders as `width` spaces. `max_value` is the
-    upper bound of the scale; if omitted, derived from `max(values)`.
+    Output is always exactly `width` cells. Shorter inputs are left-padded
+    with literal spaces so the newest sample stays anchored to the right
+    edge — that pad is the only situation where a space appears in the
+    output. `max_value` is the upper bound of the scale; if omitted, it
+    is derived from `max(values)`.
+
+    Empty / all-zero input renders entirely as spaces. Once any sample is
+    non-zero, every data position renders a glyph: zero buckets pick a
+    faint baseline (`SPARK_BASELINE`, styled `dim`) so a sparse series
+    reads as a continuous trace rather than scattered specks across blank
+    cells.
 
     By default cells are colored per-sample via `_grade_color(cell/max)` —
     a green→yellow→red gradient that signals proximity to a known cap.
     Pass `color` to force a single flat style instead; use this for series
     that convey shape over time without a meaningful ceiling (e.g. raw
     rate counts), where the gradient would otherwise paint the rolling
-    peak red regardless of absolute magnitude.
+    peak red regardless of absolute magnitude. The baseline glyph stays
+    `dim` regardless of `color` so it visually recedes against active
+    samples.
     """
     if width <= 0:
         return Text('')
@@ -126,9 +136,12 @@ def sparkline(
     if not samples:
         return text
     peak = max_value if max_value is not None else max(samples)
+    if peak <= 0:
+        text.append(' ' * len(samples))
+        return text
     for sample in samples:
-        if peak <= 0 or sample <= 0:
-            text.append(' ')
+        if sample <= 0:
+            text.append(SPARK_BASELINE, style='dim')
             continue
         ratio = min(1.0, sample / peak)
         idx = min(len(SPARK_BLOCKS) - 1, max(0, int(ratio * (len(SPARK_BLOCKS) - 1))))
