@@ -1088,6 +1088,74 @@ def test_reviewer_no_verdict_treated_as_blocker(
     assert getattr(update, 'unset_assignee', False) is True
 
 
+def test_reviewer_empty_range_blocked_escalates_to_human(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _spawn_reviewer(
+        monkeypatch,
+        result_text='VERDICT: BLOCKED no new commits since prior review',
+    )
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(
+        _review_issue(label_names=('attempts:1',), label_ids=('lab-att-1',))
+    )
+
+    worker_mod.run_claimed(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue=fake._issue,  # type: ignore[attr-defined]
+        agent_id='4',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        github_pat=None,
+        cli='claude',
+    )
+
+    body = fake.comments[0][1]
+    assert 'no new commits since prior review' in body
+    assert 'escalating to human' in body
+    _, update = fake.updates[0]
+    assert getattr(update, 'state_id', None) == 'state-await'
+    assert getattr(update, 'unset_assignee', False) is True
+    label_ids = getattr(update, 'label_ids', None)
+    assert label_ids is not None
+    assert 'lab-stuck' in label_ids
+    # Attempts label is preserved as-is, not incremented.
+    assert 'lab-att-1' in label_ids
+    assert 'lab-att-2' not in label_ids
+
+
+def test_reviewer_generic_blocked_still_routes_to_backlog(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _spawn_reviewer(
+        monkeypatch,
+        result_text='VERDICT: BLOCKED missing PR url',
+    )
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_review_issue())
+
+    worker_mod.run_claimed(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue=fake._issue,  # type: ignore[attr-defined]
+        agent_id='5',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        github_pat=None,
+        cli='claude',
+    )
+
+    assert any('BLOCKED' in c[1] for c in fake.comments)
+    _, update = fake.updates[0]
+    assert getattr(update, 'state_id', None) == 'state-backlog'
+    assert getattr(update, 'unset_assignee', False) is True
+    # No stuck label applied for generic BLOCKED.
+    label_ids = getattr(update, 'label_ids', None)
+    if label_ids is not None:
+        assert 'lab-stuck' not in label_ids
+
+
 # --- Phase 5: ARCHITECT decomposition ---------------------------------------
 
 
