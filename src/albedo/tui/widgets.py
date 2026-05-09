@@ -60,7 +60,7 @@ PHASE_COLORS: dict[str, str] = {
 
 
 SPARK_BLOCKS: tuple[str, ...] = ('⣀', '⣄', '⣤', '⣦', '⣶', '⣷', '⣾', '⣿')
-SPARK_BASELINE: str = '⠤'
+SPARK_BASELINE: str = '⣀'
 GAUGE_FILLED = '█'
 GAUGE_HALF = '▒'
 GAUGE_EMPTY = '░'
