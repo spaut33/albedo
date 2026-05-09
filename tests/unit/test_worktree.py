@@ -7,8 +7,13 @@ milliseconds — they don't touch the network.
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
+import threading
+import time
+from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -23,6 +28,8 @@ from albedo.worktree import (
     remove_worktree,
     worktree_path,
 )
+
+pytest.importorskip('fcntl')
 
 
 @pytest.fixture
@@ -397,3 +404,76 @@ def test_run_git_timeout_raises(repo: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(wt_mod.subprocess, 'run', fake_run)
     with pytest.raises(WorktreeError, match='timed out'):
         ensure_worktree(repo, Path('/tmp'), 'sample', 'AI-9', 'main', fetch=False)
+
+
+def test_ensure_worktree_concurrent_threads_all_succeed(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Regression: 4 threads racing on the shared .git must not crash on ref locks."""
+    wt_root = tmp_path / 'worktrees'
+    issue_count = 4
+    issues = [f'AI-{200 + i}' for i in range(issue_count)]
+
+    def call(issue: str) -> Path:
+        return ensure_worktree(repo, wt_root, 'sample', issue, 'main').path
+
+    with ThreadPoolExecutor(max_workers=issue_count) as pool:
+        paths = list(pool.map(call, issues))
+
+    assert len(paths) == issue_count
+    for path, issue in zip(paths, issues, strict=True):
+        assert path.exists()
+        assert path == worktree_path(wt_root, 'sample', issue)
+
+
+def test_ensure_worktree_serializes_critical_section(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prove serialization: at most one thread is inside the locked block."""
+    from albedo import worktree as wt_mod
+
+    state_lock = threading.Lock()
+    counters = {'inside': 0, 'max_inside': 0}
+    real_repo_lock = wt_mod._repo_lock  # pyright: ignore[reportPrivateUsage]
+
+    @contextlib.contextmanager
+    def probing_repo_lock(repo_path: Path) -> Generator[None, None, None]:
+        with real_repo_lock(repo_path):
+            with state_lock:
+                counters['inside'] += 1
+                counters['max_inside'] = max(counters['max_inside'], counters['inside'])
+            try:
+                # Hold the section briefly so concurrent threads have a real
+                # chance to overlap if serialization were broken.
+                time.sleep(0.05)
+                yield
+            finally:
+                with state_lock:
+                    counters['inside'] -= 1
+
+    monkeypatch.setattr(wt_mod, '_repo_lock', probing_repo_lock)
+
+    wt_root = tmp_path / 'worktrees'
+    issues = [f'AI-{300 + i}' for i in range(4)]
+
+    def call(issue: str) -> None:
+        ensure_worktree(repo, wt_root, 'sample', issue, 'main')
+
+    with ThreadPoolExecutor(max_workers=len(issues)) as pool:
+        list(pool.map(call, issues))
+
+    assert counters['max_inside'] == 1, (
+        f'expected serialization, saw {counters["max_inside"]} concurrent entries'
+    )
+
+
+def test_ensure_worktree_releases_lock_on_error(repo: Path, tmp_path: Path) -> None:
+    """A failing call inside the lock must not deadlock subsequent callers."""
+    wt_root = tmp_path / 'worktrees'
+    with pytest.raises(WorktreeError):
+        ensure_worktree(repo, wt_root, 'sample', 'AI-400', 'no-such-base', fetch=False)
+    # If the lock leaked, this second call would block forever; the test
+    # itself acts as the deadlock detector via pytest's per-test timeout
+    # (and a follow-up call returning normally proves release).
+    info = ensure_worktree(repo, wt_root, 'sample', 'AI-401', 'main')
+    assert info.path.exists()
