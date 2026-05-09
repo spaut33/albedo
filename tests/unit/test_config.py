@@ -14,6 +14,7 @@ from albedo.config import (
     LINEAR_API_KEY_ENV,
     LinearConfig,
     OrchestratorFileConfig,
+    RoleExtraToolsConfig,
     UsageConfig,
     default_config_path,
     load_bot_identity,
@@ -94,6 +95,45 @@ def test_load_full_config(tmp_path: Path) -> None:
     assert cfg.linear.team == 'TEAM'
     assert cfg.usage.rolling_window_token_cap == 50_000
     assert cfg.usage.rolling_window_seconds == 3600
+
+
+def test_role_extra_tools_default_grants_github_to_coder_and_reviewer() -> None:
+    """Out-of-the-box behaviour preserves existing operators: a fresh
+    install with no `tools:` section still allows the GitHub MCP for
+    CODER and REVIEWER, so PRs keep working."""
+    tools = RoleExtraToolsConfig()
+    assert tools.for_role('CODER') == ('mcp__github__*',)
+    assert tools.for_role('REVIEWER') == ('mcp__github__*',)
+    assert tools.for_role('ARCHITECT') == ()
+    assert tools.for_role('UNKNOWN') == ()
+
+
+def test_load_config_without_tools_section_uses_github_defaults(
+    tmp_path: Path,
+) -> None:
+    cfg_path = _write(tmp_path, _MIN_GLOBAL)
+    cfg = load_config(cfg_path)
+    assert cfg.tools.for_role('CODER') == ('mcp__github__*',)
+    assert cfg.tools.for_role('REVIEWER') == ('mcp__github__*',)
+    assert cfg.tools.for_role('ARCHITECT') == ()
+
+
+def test_load_config_with_tools_section_overrides_defaults(tmp_path: Path) -> None:
+    cfg_path = _write(
+        tmp_path,
+        """
+        linear:
+          team: ORC
+        tools:
+          coder_allow_extra: ["mcp__github__*", "mcp__context7__*"]
+          reviewer_allow_extra: []
+          architect_allow_extra: ["mcp__context7__*"]
+        """,
+    )
+    cfg = load_config(cfg_path)
+    assert cfg.tools.coder_allow_extra == ('mcp__github__*', 'mcp__context7__*')
+    assert cfg.tools.reviewer_allow_extra == ()
+    assert cfg.tools.architect_allow_extra == ('mcp__context7__*',)
 
 
 def test_load_rejects_non_mapping_root(tmp_path: Path) -> None:

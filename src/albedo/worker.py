@@ -721,7 +721,9 @@ def run_claimed(
         branch=branch_for_issue(issue.identifier),
         base_branch=config.repo.base_branch,
         repo_name=repo_name,
-        allowed_tools=','.join(role.allowed_tools),
+        allowed_tools=','.join(
+            (*role.allowed_tools, *config.tools.for_role(role.role))
+        ),
         target_column_on_success=role.target_state_on_success,
         target_column_on_blocker=role.target_state_on_blocker,
         role_timeout_minutes=role.timeout_minutes,
@@ -776,7 +778,10 @@ def run_claimed(
     claude = spawn_claude(
         prompt,
         cwd=worktree.path,
-        allowed_tools=list(role.allowed_tools),
+        allowed_tools=[
+            *role.allowed_tools,
+            *config.tools.for_role(role.role),
+        ],
         mcp_config_path=mcp_config_path,
         max_turns=role.max_turns,
         timeout_seconds=role.timeout_minutes * 60,
@@ -943,7 +948,9 @@ def run_once(
         branch=branch_for_issue(issue.identifier),
         base_branch=config.repo.base_branch,
         repo_name=repo_name,
-        allowed_tools=','.join(role.allowed_tools),
+        allowed_tools=','.join(
+            (*role.allowed_tools, *config.tools.for_role(role.role))
+        ),
         target_column_on_success=role.target_state_on_success,
         target_column_on_blocker=role.target_state_on_blocker,
         role_timeout_minutes=role.timeout_minutes,
@@ -972,7 +979,10 @@ def run_once(
     claude = spawn_claude(
         prompt,
         cwd=worktree.path,
-        allowed_tools=list(role.allowed_tools),
+        allowed_tools=[
+            *role.allowed_tools,
+            *config.tools.for_role(role.role),
+        ],
         mcp_config_path=mcp_config_path,
         max_turns=role.max_turns,
         timeout_seconds=role.timeout_minutes * 60,

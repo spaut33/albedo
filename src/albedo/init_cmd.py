@@ -58,6 +58,15 @@ models:
   reviewer: claude-sonnet-4-6
   architect: claude-opus-4-7
   triage: claude-sonnet-4-6
+
+# MCP allow-list extensions, appended to each role's built-in tools at
+# spawn time. Patterns follow Claude Code's `--allowed-tools` syntax,
+# e.g. `mcp__github__*` for the bundled GitHub proxy or
+# `mcp__context7__*` for an operator-level docs server.
+tools:
+  coder_allow_extra: ["mcp__github__*"]
+  reviewer_allow_extra: ["mcp__github__*"]
+  architect_allow_extra: []
 """
 
 _ENV_TEMPLATE = """\

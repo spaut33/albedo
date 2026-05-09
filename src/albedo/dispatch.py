@@ -25,6 +25,10 @@ class RoleSpec:
 CODER = RoleSpec(
     role='CODER',
     prompt_template='coder.md',
+    # Role-defining tools only. External MCP integrations (github proxy,
+    # context7 docs, custom servers) come from `config.tools.for_role`
+    # at spawn time so adding/removing an MCP is a config change, not a
+    # code change.
     allowed_tools=(
         'Read',
         'Edit',
@@ -33,7 +37,6 @@ CODER = RoleSpec(
         'Grep',
         'Bash',
         'Skill',
-        'mcp__github__*',
     ),
     target_state_on_success='Review',
     target_state_on_blocker='Backlog',
@@ -51,7 +54,6 @@ REVIEWER = RoleSpec(
         'Bash',
         'Task',
         'Skill',
-        'mcp__github__*',
     ),
     target_state_on_success='Awaiting approval',
     target_state_on_blocker='Backlog',
