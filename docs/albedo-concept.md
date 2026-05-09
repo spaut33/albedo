@@ -687,7 +687,7 @@ Detection:
 - Heartbeat: every worker updates a timestamp in a local file
   `state/agent-<id>.heartbeat` once per minute
 - On startup the orchestrator checks: are there Linear tasks assigned
-  to agent-X whose heartbeat is older than 5 minutes? → unassign and
+  to agent-X whose heartbeat is older than 30 minutes? → unassign and
   leave them in their current column. Logged as stale-claim recovery.
 
 Additionally: timestamp in a Linear comment on pickup. If a task is
