@@ -54,6 +54,11 @@ class ClaudeRunResult:
     raw: Mapping[str, Any] = field(default_factory=_empty_any_map)
     timed_out: bool = False
     transcript_path: Path | None = None
+    # `result` events for `error_max_turns` / `error_during_execution` and
+    # the synthetic timeout result carry no `result` text — only a structured
+    # reason. Surfacing it here lets the worker log and Linear comments
+    # explain *why* a run failed instead of printing an empty fenced block.
+    terminal_reason: str | None = None
 
 
 def spawn_claude(
@@ -180,6 +185,7 @@ def spawn_claude(
             raw=snapshot.final_event or {},
             timed_out=True,
             transcript_path=transcript_path,
+            terminal_reason='timeout',
         )
 
     if snapshot.final_event is None:
@@ -313,6 +319,7 @@ def _build_result(
 ) -> ClaudeRunResult:
     final = snapshot.final_event or {}
     is_error = bool(final.get('is_error', exit_code != 0))
+    terminal_reason = final.get('terminal_reason') or final.get('subtype')
     return ClaudeRunResult(
         is_error=is_error,
         exit_code=exit_code,
@@ -321,6 +328,7 @@ def _build_result(
         usage=_extract_usage_map(final),
         raw=final,
         transcript_path=transcript_path,
+        terminal_reason=terminal_reason if isinstance(terminal_reason, str) else None,
     )
 
 

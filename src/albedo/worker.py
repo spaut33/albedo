@@ -583,15 +583,32 @@ def _handle_claim_and_run(
         return
 
     if run_once_result.claude.is_error:
+        summary = _failure_summary(run_once_result.claude)
         log.info(
             '%s blocked: %s',
             claimed.identifier,
-            run_once_result.claude.result_text[:200],
+            summary[:200],
         )
-        status.note(f'blocked: {run_once_result.claude.result_text[:120]}')
+        status.note(f'blocked: {summary[:120]}')
     else:
         status.note(f'completed {claimed.identifier}')
     status.clear_issue()
+
+
+def _failure_summary(claude: ClaudeRunResult) -> str:
+    """Human-readable failure description for logs and Linear comments.
+
+    `result_text` is empty for `error_max_turns` / `error_during_execution`
+    final events, so the prior `result_text[:N]` fallback produced empty
+    "blocked: " log lines and empty fenced blocks in Linear. Surface
+    `terminal_reason` (e.g. `max_turns`, `timeout`) when text is missing.
+    """
+    text = (claude.result_text or '').strip()
+    if text:
+        return text
+    if claude.terminal_reason:
+        return f'<terminal_reason: {claude.terminal_reason}>'
+    return '<no result text>'
 
 
 def _outcome_label(claude: ClaudeRunResult) -> str:
@@ -1183,6 +1200,7 @@ def _post_spawn_linear_update(
         claude=claude,
         states=states,
         agent_id=agent_id,
+        max_attempts_before_escalation=max_attempts_before_escalation,
         branch_state=coder_branch_state,
     )
 
@@ -1241,45 +1259,94 @@ def _post_spawn_coder(
     claude: ClaudeRunResult,
     states: dict[str, str],
     agent_id: str,
+    max_attempts_before_escalation: int = MAX_ATTEMPTS_BEFORE_ESCALATION,
     branch_state: CoderBranchState | None = None,
 ) -> tuple[str | None, bool]:
     pr_url = parse_pr_url(claude.result_text)
     prefix = f'**agent-{agent_id}**: '
 
     if claude.is_error or pr_url is None:
+        summary = _failure_summary(claude)
         reason = (
             'claude reported an error'
             if claude.is_error
             else 'no PR URL marker found in claude output'
         )
-        body = f'{prefix}BLOCKED: {reason}.\n\n```\n{claude.result_text[:1500]}\n```'
+        body = f'{prefix}BLOCKED: {reason}.\n\n```\n{summary[:1500]}\n```'
         linear.add_comment(issue.id, body)
         target = states.get(role.target_state_on_blocker)
         if target is None:
             return pr_url, False
-        # If the agent's output explicitly carried a `BLOCKED: ...` line,
-        # treat it as a clarifying question to the human and gate the
-        # issue from re-pickup until a new user comment arrives. Pure
-        # error/no-marker cases stay re-pickable so transient failures
-        # self-heal.
-        update_labels = issue.label_ids
+        label_lookup = _resolve_team_labels(linear, issue)
+        # Explicit `BLOCKED: ...` from a successful run is a clarifying
+        # question for the human — gate re-pickup with awaiting-human-reply
+        # and don't bump attempts (this isn't a failed iteration).
         if not claude.is_error and BLOCKED_PATTERN.search(claude.result_text or ''):
-            label_lookup = _resolve_team_labels(linear, issue)
             update_labels = _add_label(
-                update_labels, label_lookup, AWAITING_HUMAN_REPLY_LABEL
+                issue.label_ids, label_lookup, AWAITING_HUMAN_REPLY_LABEL
             )
+            linear.update_issue(
+                issue.id,
+                IssueUpdate(
+                    state_id=target,
+                    label_ids=update_labels,
+                    unset_assignee=True,
+                ),
+            )
+            log.info(
+                '%s -> %s (coder blocked)',
+                issue.identifier,
+                role.target_state_on_blocker,
+            )
+            return pr_url, True
+        # Silent failure (max_turns / timeout / no-PR / generic error). Bump
+        # the shared `attempts:N` counter and escalate at the threshold so
+        # we don't burn $3 per round in a re-pickup loop forever — mirrors
+        # the reviewer-side escalation in AI-87.
+        current_attempts = attempts_from_labels(issue.label_names)
+        next_attempts = current_attempts + 1
+        if next_attempts >= max_attempts_before_escalation:
+            new_labels = _set_attempts_label(
+                issue.label_ids, label_lookup, next_attempts
+            )
+            new_labels = _add_label(new_labels, label_lookup, 'stuck')
+            escalation_body = (
+                f'{prefix}coder failed {next_attempts} runs in a row '
+                f'(last: {summary[:600]}) — escalating to human.'
+            )
+            linear.add_comment(issue.id, escalation_body)
+            stuck_target = states.get('Awaiting approval')
+            if stuck_target is None:
+                return pr_url, False
+            linear.update_issue(
+                issue.id,
+                IssueUpdate(
+                    state_id=stuck_target,
+                    label_ids=new_labels,
+                    unset_assignee=True,
+                ),
+            )
+            log.info(
+                '%s coder failed %d runs -> Awaiting approval (stuck)',
+                issue.identifier,
+                next_attempts,
+            )
+            return pr_url, True
+        new_labels = _set_attempts_label(issue.label_ids, label_lookup, next_attempts)
         linear.update_issue(
             issue.id,
             IssueUpdate(
                 state_id=target,
-                label_ids=update_labels,
+                label_ids=new_labels,
                 unset_assignee=True,
             ),
         )
         log.info(
-            '%s -> %s (coder blocked)',
+            '%s -> %s (coder blocked, attempts=%d/%d)',
             issue.identifier,
             role.target_state_on_blocker,
+            next_attempts,
+            max_attempts_before_escalation,
         )
         return pr_url, True
 

@@ -26,7 +26,7 @@ def test_coder_spec_has_expected_targets() -> None:
     assert CODER.target_state_on_success == 'Review'
     assert CODER.target_state_on_blocker == 'Backlog'
     assert CODER.timeout_minutes == 30
-    assert CODER.max_turns == 50
+    assert CODER.max_turns == 100
     assert 'Edit' in CODER.allowed_tools
 
 
