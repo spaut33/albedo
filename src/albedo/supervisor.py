@@ -510,8 +510,11 @@ def _housekeeping_loop(
                         if redispatch_report.fired:
                             log.info(
                                 'housekeeping: redispatched %d issue(s) on '
-                                'new user comments',
+                                'new user comments (%s)',
                                 len(redispatch_report.fired),
+                                ', '.join(
+                                    r.issue_identifier for r in redispatch_report.fired
+                                ),
                             )
                         if redispatch_report.skipped_non_substantive:
                             log.info(
@@ -540,8 +543,10 @@ def _housekeeping_loop(
                         )
                         if ci_report.fired:
                             log.info(
-                                'housekeeping: redispatched %d issue(s) on failed CI',
+                                'housekeeping: redispatched %d issue(s) on '
+                                'failed CI (%s)',
                                 len(ci_report.fired),
+                                ', '.join(r.issue_identifier for r in ci_report.fired),
                             )
                         if ci_report.seeded:
                             log.info(

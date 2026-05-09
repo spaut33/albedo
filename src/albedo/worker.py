@@ -278,13 +278,19 @@ def filter_dispatchable(candidates: list[Issue]) -> list[Issue]:
     ]
 
 
-def release_claim_assignee(*, linear: LinearClient, issue: Issue) -> None:
+def release_claim_assignee(
+    *, linear: LinearClient, issue: Issue, reason: str = 'unspecified'
+) -> None:
     """Drop the assignee on an issue, returning it to the pool.
 
     Mirrors `claim.release_claim` but exposed here so housekeeping can call
-    it without importing claim.py (which knows about git internals).
+    it without importing claim.py (which knows about git internals). The
+    `reason` is logged so the events panel surfaces *why* a claim was
+    released — distinguishes a usage-limit pause from a crashed run from a
+    stale-claim recovery.
     """
     linear.update_issue(issue.id, IssueUpdate(unset_assignee=True))
+    log.info('%s: claim released (%s)', issue.identifier, reason)
 
 
 def build_mcp_extra_env(
@@ -522,7 +528,9 @@ def _handle_claim_and_run(
         states_map = _resolve_target_states(linear, claimed)
     except Exception as exc:
         log.warning('state lookup for %s failed: %s', claimed.identifier, exc)
-        release_claim_assignee(linear=linear, issue=claimed)
+        release_claim_assignee(
+            linear=linear, issue=claimed, reason='state lookup failed'
+        )
         status.clear_issue()
         return
     try:
@@ -536,7 +544,9 @@ def _handle_claim_and_run(
         )
     except Exception as exc:
         log.warning('in-progress transition for %s failed: %s', claimed.identifier, exc)
-        release_claim_assignee(linear=linear, issue=claimed)
+        release_claim_assignee(
+            linear=linear, issue=claimed, reason='in-progress transition failed'
+        )
         status.clear_issue()
         return
 
@@ -569,7 +579,9 @@ def _handle_claim_and_run(
                 state_dir=config.state_dir,
                 agent_id=agent_id,
             )
-        release_claim_assignee(linear=linear, issue=claimed)
+        release_claim_assignee(
+            linear=linear, issue=claimed, reason='unknown column for dispatch'
+        )
         status.clear_issue()
         return
     except Exception as exc:
@@ -581,7 +593,7 @@ def _handle_claim_and_run(
                 state_dir=config.state_dir,
                 agent_id=agent_id,
             )
-        release_claim_assignee(linear=linear, issue=claimed)
+        release_claim_assignee(linear=linear, issue=claimed, reason='run crashed')
         status.clear_issue()
         return
 
@@ -596,7 +608,7 @@ def _handle_claim_and_run(
                 state_dir=config.state_dir,
                 agent_id=agent_id,
             )
-        release_claim_assignee(linear=linear, issue=claimed)
+        release_claim_assignee(linear=linear, issue=claimed, reason='usage-limit pause')
         status.note(f'usage-limit pause; released {claimed.identifier}')
         status.clear_issue()
         return
@@ -1416,6 +1428,7 @@ def _post_spawn_coder(
             )
             return pr_url, True
 
+    log.info('%s: PR opened %s', issue.identifier, pr_url)
     linear.add_comment(issue.id, f'{prefix}PR: {pr_url}')
     target = states.get(role.target_state_on_success)
     if target is None:

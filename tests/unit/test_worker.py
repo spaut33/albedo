@@ -572,11 +572,72 @@ def test_run_once_happy_path_moves_to_review_and_comments(
         'AI-5: Backlog -> Review (PR https://github.com/me/sample/pull/3)'
         in caplog.messages
     )
+    pr_opened = [
+        m
+        for m in caplog.messages
+        if m == 'AI-5: PR opened https://github.com/me/sample/pull/3'
+    ]
+    assert pr_opened == ['AI-5: PR opened https://github.com/me/sample/pull/3']
 
     prompt_text = cast('str', captured[0]['prompt'])
     assert 'AI-5' in prompt_text
     assert 'CODER' in prompt_text
     assert 'Filter works' in prompt_text
+
+
+def test_run_once_skips_pr_opened_log_when_result_has_no_pr_url(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Coder result without a `PR:` marker is treated as a blocker —
+    no `<ISSUE>: PR opened ...` line should be emitted."""
+    _stub_spawn(monkeypatch, result_text='no marker here')
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        result = run_once(
+            config=cfg,
+            linear=fake,  # type: ignore[arg-type]
+            issue_identifier='AI-5',
+            agent_id='1',
+            prompts_dir=bundled_prompts_dir(),
+            mcp_config_path=None,
+            cli='claude',
+            fetch=False,
+        )
+
+    assert result.pr_url is None
+    assert not any(m.startswith('AI-5: PR opened ') for m in caplog.messages)
+
+
+def test_run_once_skips_pr_opened_log_for_malformed_pr_marker(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`PR: not-a-url` does not match `PR_URL_PATTERN` — no log line, no raise."""
+    _stub_spawn(monkeypatch, result_text='PR: not-a-url')
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        result = run_once(
+            config=cfg,
+            linear=fake,  # type: ignore[arg-type]
+            issue_identifier='AI-5',
+            agent_id='1',
+            prompts_dir=bundled_prompts_dir(),
+            mcp_config_path=None,
+            cli='claude',
+            fetch=False,
+        )
+
+    assert result.pr_url is None
+    assert not any(m.startswith('AI-5: PR opened ') for m in caplog.messages)
 
 
 def test_run_once_merges_role_and_config_extra_tools_into_spawn(
