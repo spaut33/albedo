@@ -111,11 +111,11 @@ def sparkline(
     output. `max_value` is the upper bound of the scale; if omitted, it
     is derived from `max(values)`.
 
-    Empty / all-zero input renders entirely as spaces. Once any sample is
-    non-zero, every data position renders a glyph: zero buckets pick a
-    faint baseline (`SPARK_BASELINE`, styled `dim`) so a sparse series
-    reads as a continuous trace rather than scattered specks across blank
-    cells.
+    Any non-empty input renders glyphs in the data region: zero buckets
+    pick a faint baseline (`SPARK_BASELINE`, styled `dim`) so an all-zero
+    or sparse series reads as a continuous X-axis rather than scattered
+    specks across blank cells. Only the left-pad uses literal spaces;
+    fully empty input (no samples at all) renders nothing.
 
     By default cells are colored per-sample via `_grade_color(cell/max)` —
     a green→yellow→red gradient that signals proximity to a known cap.
@@ -128,16 +128,20 @@ def sparkline(
     """
     if width <= 0:
         return Text('')
+    text = Text(no_wrap=True)
+    if len(values) == 0:
+        text.append(' ' * width)
+        return text
     samples = _downsample(values, width)
     pad = width - len(samples)
-    text = Text(no_wrap=True)
     if pad > 0:
         text.append(' ' * pad)
     if not samples:
         return text
     peak = max_value if max_value is not None else max(samples)
     if peak <= 0:
-        text.append(' ' * len(samples))
+        for _ in samples:
+            text.append(SPARK_BASELINE, style='dim')
         return text
     for sample in samples:
         if sample <= 0:
