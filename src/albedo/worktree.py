@@ -8,9 +8,12 @@ reaches Done or Cancelled.
 from __future__ import annotations
 
 import contextlib
+import fcntl
+import os
 import shlex
 import subprocess
 import sys
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,39 +107,61 @@ def ensure_worktree(
         )
         return WorktreeInfo(path=target, branch=branch, base_branch=base_branch)
 
-    # Drop dangling worktree refs (e.g. dir was deleted manually) so the next
-    # `worktree add` doesn't fail on stale metadata.
-    _run_git(repo_path, ['worktree', 'prune'], timeout_seconds=timeout_seconds)
+    with _repo_lock(repo_path):
+        # Drop dangling worktree refs (e.g. dir was deleted manually) so the next
+        # `worktree add` doesn't fail on stale metadata.
+        _run_git(repo_path, ['worktree', 'prune'], timeout_seconds=timeout_seconds)
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if fetch:
-        _run_git(repo_path, ['fetch', 'origin'], timeout_seconds=timeout_seconds)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if fetch:
+            _run_git(repo_path, ['fetch', 'origin'], timeout_seconds=timeout_seconds)
 
-    if _branch_exists(repo_path, branch, timeout_seconds=timeout_seconds):
-        # Reuse the existing branch — no `-b`.
-        _run_git(
-            repo_path,
-            ['worktree', 'add', str(target), branch],
-            timeout_seconds=timeout_seconds,
+        if _branch_exists(repo_path, branch, timeout_seconds=timeout_seconds):
+            # Reuse the existing branch — no `-b`.
+            _run_git(
+                repo_path,
+                ['worktree', 'add', str(target), branch],
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            _run_git(
+                repo_path,
+                [
+                    'worktree',
+                    'add',
+                    '-b',
+                    branch,
+                    str(target),
+                    f'origin/{base_branch}',
+                ],
+                timeout_seconds=timeout_seconds,
+            )
+        _apply_bot_identity(target, bot_identity, timeout_seconds=timeout_seconds)
+        _apply_credential_helper(
+            target, credential_helper_command, timeout_seconds=timeout_seconds
         )
-    else:
-        _run_git(
-            repo_path,
-            [
-                'worktree',
-                'add',
-                '-b',
-                branch,
-                str(target),
-                f'origin/{base_branch}',
-            ],
-            timeout_seconds=timeout_seconds,
-        )
-    _apply_bot_identity(target, bot_identity, timeout_seconds=timeout_seconds)
-    _apply_credential_helper(
-        target, credential_helper_command, timeout_seconds=timeout_seconds
-    )
     return WorktreeInfo(path=target, branch=branch, base_branch=base_branch)
+
+
+@contextlib.contextmanager
+def _repo_lock(repo_path: Path) -> Generator[None, None, None]:
+    """Serialize ref-mutating git ops against the shared .git of `repo_path`.
+
+    Concurrent `git fetch origin` / `git worktree add` against the same repo
+    race on `refs/remotes/...` and crash with 'cannot lock ref / unable to
+    update local ref'. Holding an exclusive `fcntl.flock` on
+    `<repo>/.git/albedo-fetch.lock` for the mutation block makes threads
+    (and other albedo processes on the same host) take the refspace one
+    at a time. The lock is released when the file descriptor is closed,
+    which happens on both normal exit and exception.
+    """
+    lock_path = repo_path / '.git' / 'albedo-fetch.lock'
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def _apply_bot_identity(
