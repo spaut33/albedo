@@ -39,6 +39,8 @@ from albedo.status_writer import (
 
 EVENTS_RING_SIZE = 200
 LOG_GLOB = 'logs/agent-*.log'
+SUPERVISOR_LOG_NAME = 'supervisor.log'
+SUPERVISOR_AGENT_TOKEN = 'sv'
 LINEAR_QUEUE_FILE = 'linear_queue.json'
 
 
@@ -188,11 +190,17 @@ class LogTailer:
     def _discover_paths(self) -> list[Path]:
         if not self._log_dir.exists():
             return []
-        return sorted(self._log_dir.glob('agent-*.log'))
+        paths: list[Path] = list(self._log_dir.glob('agent-*.log'))
+        supervisor = self._log_dir / SUPERVISOR_LOG_NAME
+        if supervisor.exists():
+            paths.append(supervisor)
+        return sorted(paths)
 
 
 def _agent_from_log_path(path: Path) -> str:
-    name = path.stem  # agent-1, agent-2
+    name = path.stem  # agent-1, agent-2, supervisor
+    if name == 'supervisor':
+        return SUPERVISOR_AGENT_TOKEN
     return name.removeprefix('agent-')
 
 

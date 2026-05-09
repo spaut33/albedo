@@ -193,11 +193,14 @@ def test_events_panel_renders_recent_messages() -> None:
     events = [
         LogEvent(ts=time.time(), agent='1', level='info', message='claimed LIN-1'),
         LogEvent(ts=time.time(), agent='2', level='warning', message='backoff'),
+        LogEvent(ts=time.time(), agent='sv', level='info', message='housekeeping ran'),
     ]
     snap = _make_snapshot([_make_worker('1')], events=events)
     text = _capture(widgets.render_events(snap.events))
     assert 'claimed LIN-1' in text
     assert 'backoff' in text
+    assert 'housekeeping ran' in text
+    assert 'sv' in text
 
 
 def test_queue_panel_lists_columns() -> None:
