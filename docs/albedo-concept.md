@@ -705,24 +705,38 @@ operations — no magic comments, no custom buttons, no special triggers.
 ### 13.1 Decomposition approval (after ARCHITECT)
 
 **State:** parent in Awaiting approval with label `kind:decomposition`,
-children created by the Architect in Backlog with label `draft`
-(workers ignore them).
+children created by the Architect in Triage with the parent linked
+(workers skip Triage issues whose `parent_id` is set — no `draft`
+label is involved; see `worker._post_spawn_architect` in
+`src/albedo/worker.py`).
+<!-- TODO: reconcile remaining `draft`-label references elsewhere in
+this doc (e.g. §3, §6, §7) with the actual Triage + parent_id pickup
+gate used in code. -->
 
 **Human action:**
 1. Open the parent in Linear, read its rationale comment
 2. Follow the links to the child issues, check AC and order
-3. **Approve:** move the parent to Done. Semantics: the parent task is
-   complete, and its work was the decomposition.
+3. **Approve:** move the parent to Todo. Semantics: the parent is
+   approved and now tracks live decomposition work — it stays open
+   while children are in flight and only auto-completes once every
+   child reaches a finished state.
 4. **Reject:** move the parent to Triage with a feedback comment.
 
-**What happens automatically after approve (parent → Done):**
+**What happens automatically after approve (parent → Todo):**
 - The orchestrator's approval watcher detects an issue with label
-  `kind:decomposition` transitioning to Done
-- It strips the `draft` label from all of that parent's children
+  `kind:decomposition` transitioning to Todo
+- It moves each child from Triage to Backlog (see
+  `release_decomposed_children` in `src/albedo/housekeeping.py`)
 - The children become visible to polling — Coders pick them up and
   start
 - Each child later goes through its own Coder → Review → final approval
   cycle with its own PR
+- When every child reaches a finished state (Done / Canceled /
+  Cancelled / Duplicate), the orchestrator auto-moves the parent to
+  Done — see `complete_decompositions_when_children_done` in
+  `src/albedo/housekeeping.py`. If any child is still unfinished the
+  rollup is a no-op and the parent stays in Todo until the last child
+  finishes.
 
 **What happens after reject (parent → Triage):**
 - On re-pickup, the Architect sees existing children in pre-flight and
