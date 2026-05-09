@@ -14,6 +14,7 @@ from rich.console import Console
 
 from albedo.status_writer import (
     PHASE_POLLING,
+    PHASE_RUNNING_CLAUDE,
     PHASE_SPAWNING_CLAUDE,
     IssueRef,
     StreamSummary,
@@ -123,6 +124,20 @@ def test_workers_panel_lists_each_worker_with_role_and_issue() -> None:
     assert 'LIN-1' in text
     assert 'LIN-2' in text
     assert 'src/foo.py' in text
+
+
+def test_workers_panel_active_row_has_single_spinner_glyph() -> None:
+    # AI-92: the phase column is the canonical busy indicator; the action
+    # column must never prepend a second spinner when a tool name is set.
+    view = _make_worker(
+        '1',
+        phase=PHASE_RUNNING_CLAUDE,
+        last_tool=('Edit', 'src/foo.py'),
+    )
+    snap = _make_snapshot([view])
+    text = _capture(widgets.render_workers(snap, animated=True))
+    spinner_count = sum(text.count(frame) for frame in widgets.SPINNER_FRAMES)
+    assert spinner_count == 1, text
 
 
 def test_workers_panel_shows_display_name_when_set() -> None:
