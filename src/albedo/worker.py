@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import signal
 import time
@@ -269,26 +268,34 @@ def release_claim_assignee(*, linear: LinearClient, issue: Issue) -> None:
     linear.update_issue(issue.id, IssueUpdate(unset_assignee=True))
 
 
-def build_mcp_extra_env(github_pat: SecretStr | None) -> dict[str, str]:
+def build_mcp_extra_env(
+    *,
+    repo_root: Path,
+    state_dir: Path,
+    issue_identifier: str,
+    issue_uuid: str,
+    agent_id: str,
+    project_id: str | None,
+) -> dict[str, str]:
     """Build the env dict forwarded to `claude -p`.
 
-    Process env wins (developer may have exported a token), then we fall back
-    to whatever was loaded from `.env`. Empty values are dropped so MCP
-    servers don't see literal empty strings.
-
-    The PAT is also forwarded as `GH_TOKEN` so that any `gh` CLI invocation
-    inside the worktree (claude sometimes reaches for it instead of the
-    GitHub MCP) authenticates as the bot rather than the operator's local
-    `gh auth login` keyring identity.
+    Sets the `ALBEDO_*` variables consumed by the bundled MCP proxies
+    (`mcp_github_proxy`, `mcp_linear_proxy`) so `mcp-servers.json` can
+    omit per-spawn args. Tokens — `GITHUB_PERSONAL_ACCESS_TOKEN`,
+    `GH_TOKEN`, `LINEAR_API_KEY*` — are deliberately not forwarded; the
+    proxies hold them in-process. `claude_runner._merged_env` additionally
+    strips inherited variants so the spawned claude can never see them.
     """
-    forwarded: dict[str, str] = {}
-    pat = os.environ.get('GITHUB_PERSONAL_ACCESS_TOKEN', '').strip()
-    if not pat and github_pat is not None:
-        pat = github_pat.get_secret_value().strip()
-    if pat:
-        forwarded['GITHUB_PERSONAL_ACCESS_TOKEN'] = pat
-        forwarded['GH_TOKEN'] = pat
-    return forwarded
+    extra: dict[str, str] = {
+        'ALBEDO_REPO_ROOT': str(repo_root),
+        'ALBEDO_STATE_DIR': str(state_dir),
+        'ALBEDO_ISSUE_IDENTIFIER': issue_identifier,
+        'ALBEDO_ISSUE_UUID': issue_uuid,
+        'ALBEDO_AGENT_ID': agent_id,
+    }
+    if project_id is not None:
+        extra['ALBEDO_PROJECT_ID'] = project_id
+    return extra
 
 
 def attempts_from_labels(label_names: tuple[str, ...]) -> int:
@@ -757,7 +764,14 @@ def run_claimed(
         max_turns=role.max_turns,
         timeout_seconds=role.timeout_minutes * 60,
         cli=cli,
-        extra_env=build_mcp_extra_env(github_pat),
+        extra_env=build_mcp_extra_env(
+            repo_root=config.repo.path,
+            state_dir=config.state_dir,
+            issue_identifier=issue.identifier,
+            issue_uuid=issue.id,
+            agent_id=agent_id,
+            project_id=config.linear.project_id,
+        ),
         transcript_dir=transcript_dir,
         transcript_basename=issue.identifier,
         on_event=on_event,
@@ -946,7 +960,14 @@ def run_once(
         max_turns=role.max_turns,
         timeout_seconds=role.timeout_minutes * 60,
         cli=cli,
-        extra_env=build_mcp_extra_env(github_pat),
+        extra_env=build_mcp_extra_env(
+            repo_root=config.repo.path,
+            state_dir=config.state_dir,
+            issue_identifier=issue.identifier,
+            issue_uuid=issue.id,
+            agent_id=agent_id,
+            project_id=config.linear.project_id,
+        ),
         transcript_dir=config.state_dir / 'transcripts',
         transcript_basename=issue.identifier,
         permission_mode=role.permission_mode,

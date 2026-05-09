@@ -1,11 +1,12 @@
 {
   "mcpServers": {
     "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
-      }
+      "command": "albedo-mcp-github-proxy",
+      "args": []
+    },
+    "linear": {
+      "command": "albedo-mcp-linear-proxy",
+      "args": []
     }
   }
 }

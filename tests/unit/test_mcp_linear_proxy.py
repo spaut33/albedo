@@ -355,7 +355,35 @@ def test_main_exits_when_linear_api_key_unset(
     assert 'LINEAR_API_KEY' in err
 
 
-def test_parser_requires_all_runtime_flags() -> None:
+def test_parser_accepts_no_flags_now_that_env_fallback_exists() -> None:
+    """Required values may now arrive via ALBEDO_* env vars; the parser is
+    intentionally permissive so `mcp-servers.json` can omit per-spawn args."""
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args([])
+    ns = parser.parse_args([])
+    assert ns.issue_identifier is None
+    assert ns.issue_uuid is None
+    assert ns.agent_id is None
+    assert ns.project_id is None
+    assert ns.state_dir is None
+
+
+def test_main_exits_with_diagnostic_when_required_args_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No CLI args, no ALBEDO_* env → main exits 2 with a single diagnostic."""
+    for var in (
+        'ALBEDO_ISSUE_IDENTIFIER',
+        'ALBEDO_ISSUE_UUID',
+        'ALBEDO_AGENT_ID',
+        'ALBEDO_PROJECT_ID',
+        'ALBEDO_STATE_DIR',
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    rc = main([])
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert '--issue-identifier' in err
+    assert 'ALBEDO_ISSUE_IDENTIFIER' in err

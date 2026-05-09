@@ -834,46 +834,79 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description=(
             'Stdio MCP proxy for the narrow GitHub surface Albedo uses. '
             'Loads the PAT from $ALBEDO_HOME/.env and gates calls to the '
-            'repo declared in .albedo.yaml.'
+            'repo declared in .albedo.yaml. Required values can be passed '
+            'as CLI flags or via ALBEDO_REPO_ROOT / ALBEDO_STATE_DIR / '
+            'ALBEDO_ISSUE_IDENTIFIER / ALBEDO_AGENT_ID env vars (the worker '
+            'sets these so mcp-servers.json can omit the args entirely).'
         ),
     )
     parser.add_argument(
         '--repo-root',
         type=Path,
-        required=True,
+        default=None,
         help='Repo root containing .albedo.yaml (used for the owner/repo gate).',
     )
     parser.add_argument(
         '--state-dir',
         type=Path,
-        required=True,
+        default=None,
         help='Per-project state dir (audit log lands under <state>/logs/).',
     )
     parser.add_argument(
         '--issue-id',
-        required=True,
+        default=None,
         help='Linear issue identifier for audit attribution.',
     )
     parser.add_argument(
         '--agent-id',
-        required=True,
+        default=None,
         help='Per-process agent slot identifier for audit attribution.',
     )
     return parser
 
 
+class _MissingArgError(RuntimeError):
+    """Raised when a required arg is missing on both CLI and env."""
+
+
+def _arg_or_env(
+    cli_value: object,
+    env_var: str,
+    flag: str,
+) -> str:
+    """Return `cli_value` if truthy, else `os.environ[env_var]`.
+
+    Both CLI args and ALBEDO_* env vars are accepted: workers set the env
+    vars in the spawned claude's environment so `mcp-servers.json` can
+    omit per-spawn args. Falls back to a structured error so the caller
+    surfaces a single diagnostic line instead of an argparse traceback.
+    """
+    if cli_value:
+        return str(cli_value)
+    fallback = os.environ.get(env_var, '').strip()
+    if fallback:
+        return fallback
+    raise _MissingArgError(
+        f'{flag} (or {env_var} env var) is required',
+    )
+
+
 def resolve_config(args: argparse.Namespace) -> ProxyConfig:
     """Load PAT + manifest into a `ProxyConfig`. Raises on failure."""
+    repo_root = _arg_or_env(args.repo_root, 'ALBEDO_REPO_ROOT', '--repo-root')
+    state_dir = _arg_or_env(args.state_dir, 'ALBEDO_STATE_DIR', '--state-dir')
+    issue_id = _arg_or_env(args.issue_id, 'ALBEDO_ISSUE_IDENTIFIER', '--issue-id')
+    agent_id = _arg_or_env(args.agent_id, 'ALBEDO_AGENT_ID', '--agent-id')
     pat = load_pat_from_env_file(paths.env_file_path())
-    _, manifest = load_repo_manifest(Path(args.repo_root))
+    _, manifest = load_repo_manifest(Path(repo_root))
     owner, repo = _extract_github_coords(manifest)
     return ProxyConfig(
         pat=pat,
         allowed_owner=owner,
         allowed_repo=repo,
-        state_dir=Path(args.state_dir),
-        issue_id=str(args.issue_id),
-        agent_id=str(args.agent_id),
+        state_dir=Path(state_dir),
+        issue_id=issue_id,
+        agent_id=agent_id,
     )
 
 
@@ -885,6 +918,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = resolve_config(args)
     except PatNotFoundError as exc:
+        sys.stderr.write(f'mcp-github-proxy: {exc}\n')
+        return 2
+    except _MissingArgError as exc:
         sys.stderr.write(f'mcp-github-proxy: {exc}\n')
         return 2
     except (RuntimeError, OSError, ValueError) as exc:
