@@ -175,6 +175,33 @@ class ModelsConfig(BaseModel):
         }.get(role)
 
 
+class RoleExtraToolsConfig(BaseModel):
+    """Operator-level allow-list extensions appended to each role's
+    built-in tools at spawn time.
+
+    The role-defining tools (Read/Edit/Bash/Skill/...) live in `dispatch.py`
+    because they encode what the role *is*. External integrations (any
+    `mcp__<server>__*` the operator has wired up — `github` proxy,
+    `context7` docs, custom servers, etc.) are configuration, not code:
+    adding a new MCP should not require a fork.
+
+    Defaults bundle the GitHub MCP so a fresh install can open PRs out of
+    the box. Operators who want to turn it off (or grant additional MCPs
+    like `mcp__context7__*`) override the per-role tuple in `config.yaml`.
+    """
+
+    coder_allow_extra: tuple[str, ...] = Field(default=('mcp__github__*',))
+    reviewer_allow_extra: tuple[str, ...] = Field(default=('mcp__github__*',))
+    architect_allow_extra: tuple[str, ...] = Field(default=())
+
+    def for_role(self, role: str) -> tuple[str, ...]:
+        return {
+            'CODER': self.coder_allow_extra,
+            'REVIEWER': self.reviewer_allow_extra,
+            'ARCHITECT': self.architect_allow_extra,
+        }.get(role, ())
+
+
 class AttachmentsConfig(BaseModel):
     """Linear → worktree attachment download knobs.
 
@@ -258,6 +285,7 @@ class _SharedRuntimeFields(BaseModel):
     dispatch: DispatchConfig = Field(default_factory=DispatchConfig)
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
+    tools: RoleExtraToolsConfig = Field(default_factory=RoleExtraToolsConfig)
     attachments: AttachmentsConfig = Field(default_factory=AttachmentsConfig)
 
     @field_validator('state_dir', 'worktree_root', mode='after')
@@ -348,6 +376,7 @@ def resolve_runtime_config(
         dispatch=file_config.dispatch,
         features=file_config.features,
         models=file_config.models,
+        tools=file_config.tools,
         attachments=file_config.attachments,
         project_name=name,
         repo=RepoConfig(

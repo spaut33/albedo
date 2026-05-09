@@ -15,7 +15,12 @@ import pytest
 
 from albedo import worker as worker_mod
 from albedo.claude_runner import ClaudeRunResult
-from albedo.config import LinearConfig, OrchestratorConfig, RepoConfig
+from albedo.config import (
+    LinearConfig,
+    OrchestratorConfig,
+    RepoConfig,
+    RoleExtraToolsConfig,
+)
 from albedo.dispatch_messages import (
     CandidateMsg,
     ClaimedOk,
@@ -495,6 +500,7 @@ def _build_cfg(
     tmp_path: Path,
     *,
     max_attempts_before_escalation: int = 3,
+    tools: RoleExtraToolsConfig | None = None,
 ) -> OrchestratorConfig:
     return OrchestratorConfig(
         workers=1,
@@ -504,6 +510,7 @@ def _build_cfg(
         worktree_root=tmp_path / 'wt',
         state_dir=tmp_path / 'state',
         max_attempts_before_escalation=max_attempts_before_escalation,
+        tools=tools or RoleExtraToolsConfig(),
     )
 
 
@@ -563,6 +570,48 @@ def test_run_once_happy_path_moves_to_review_and_comments(
     assert 'AI-5' in prompt_text
     assert 'CODER' in prompt_text
     assert 'Filter works' in prompt_text
+
+
+def test_run_once_merges_role_and_config_extra_tools_into_spawn(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operator-level MCP allow-list (`config.tools.coder_allow_extra`)
+    must be appended to the role's built-in tools when claude is spawned,
+    so adding a new MCP server is a config change rather than a code
+    change. Removed `mcp__github__*` from `dispatch.CODER` for the same
+    reason — it now flows through config.
+    """
+    captured: list[Mapping[str, object]] = []
+    _stub_spawn(monkeypatch, captured=captured)
+    cfg = _build_cfg(
+        repo,
+        tmp_path,
+        tools=RoleExtraToolsConfig(
+            coder_allow_extra=('mcp__github__*', 'mcp__context7__*'),
+        ),
+    )
+    fake = _FakeLinear(_issue())
+
+    run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        cli='claude',
+        fetch=False,
+    )
+
+    kwargs = cast('Mapping[str, object]', captured[0]['kwargs'])
+    allowed = cast('list[str]', kwargs['allowed_tools'])
+    # Role-defining tools come first, operator extras follow.
+    assert allowed[0] == 'Read'
+    assert 'Edit' in allowed
+    assert 'mcp__github__*' in allowed
+    assert 'mcp__context7__*' in allowed
 
 
 def test_run_once_coder_renders_latest_reviewer_feedback_block(
