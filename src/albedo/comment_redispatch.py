@@ -26,9 +26,13 @@ included in the prompt via Part A — no redispatch action needed.
 
 Loop avoidance: per-issue `last_user_comment.json` records the most
 recently observed user-authored comment id. A new comment fires once,
-then the file pins it so the next tick skips. The file is updated on
-first observation without firing — comments that pre-date the feature
-roll-out don't trigger spurious re-dispatches.
+then the file pins it so the next tick skips. On first observation of
+an `Awaiting approval` issue we seed-without-fire only when the latest
+user comment is older than the latest bot comment — that distinguishes
+historical noise (pre-rollout backlog: bot's gating output is the most
+recent activity) from a genuine reply (user comment newer than the bot
+output). Without this check the first reply on every newly-gated issue
+would be silently swallowed.
 """
 
 from __future__ import annotations
@@ -147,19 +151,27 @@ def redispatch_on_new_user_comments(
         if prior_id == latest_id:
             continue
         if prior_id is None and issue.state_name == 'Awaiting approval':
-            # Awaiting approval: seed-without-fire on the first
-            # observation so historical comments don't replay after
-            # rollout (could destructively re-architect an approved
-            # decomposition or kick a `kind:final-pr` issue back to
-            # Review on stale feedback).
+            # Awaiting approval: rollout protection. Without the
+            # last-bot-comment check this branch swallows every first
+            # reply on a freshly-gated issue (the comment is genuinely
+            # new, but `prior_id is None` because the issue had never
+            # been inspected before). Compare timestamps: if the user
+            # commented *after* the bot's most recent output, that's a
+            # real reply to the gating proposal — fire. Otherwise the
+            # latest activity is the bot's (rollout-era backlog or
+            # nothing-newer-than-the-gate), so seed-without-fire to
+            # avoid re-architecting on stale comments.
             #
             # The `awaiting-human-reply` gate (Triage/Backlog) is fresh
             # by construction — the bot just set the label — so we fire
             # on first observation there. No rollout risk because the
             # gate didn't exist before this feature shipped.
-            seen[issue.id] = latest_id
-            seeded.append(issue.identifier)
-            continue
+            if not _user_replied_after_last_bot_comment(
+                raw_comments, bot_user_ids
+            ):
+                seen[issue.id] = latest_id
+                seeded.append(issue.identifier)
+                continue
         if triage_fn is not None and not _passes_triage(
             issue=issue,
             raw_comments=raw_comments,
@@ -267,6 +279,34 @@ def _split_thread_at_last_agent_message(
         if not is_bot_comment(c, bot_user_ids) and (c.body or '').strip()
     ]
     return agent_body, replies
+
+
+def _user_replied_after_last_bot_comment(
+    comments: Sequence[Comment],
+    bot_user_ids: frozenset[str],
+) -> bool:
+    """True iff a user comment was posted after the latest bot comment.
+
+    Used by the `Awaiting approval` first-observation branch to tell a
+    fresh reply (fire) from rollout-era backlog (seed). Falls back to
+    False (seed) when there's no bot comment to anchor on or when
+    timestamps are missing — the conservative choice preserves the
+    original rollout protection.
+    """
+    last_bot_at = ''
+    for comment in comments:
+        if not is_bot_comment(comment, bot_user_ids):
+            continue
+        if comment.created_at and comment.created_at > last_bot_at:
+            last_bot_at = comment.created_at
+    if not last_bot_at:
+        return False
+    for comment in comments:
+        if is_bot_comment(comment, bot_user_ids):
+            continue
+        if comment.created_at and comment.created_at > last_bot_at:
+            return True
+    return False
 
 
 _HUMAN_GATED_STATES: tuple[str, ...] = ('Awaiting approval', 'Triage', 'Backlog')

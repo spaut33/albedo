@@ -104,11 +104,16 @@ into the issue body.
   same comment is a no-op (loop avoidance via
   `state/last_user_comment.json`). Add another comment if you want to
   re-trigger.
-- **First observation is silent.** The first time the orchestrator sees
-  a user comment on a gated issue (`Awaiting approval`, or Triage/Backlog
-  with `awaiting-human-reply`), it just records the comment id without
-  firing — historical comments don't replay after rollout. Post a new
-  comment if you want action.
+- **First observation is silent only for stale backlog.** On the very
+  first tick that inspects an `Awaiting approval` issue, redispatch
+  fires *only if* the latest user comment is newer than the latest
+  bot comment on the issue (i.e. it's a real reply to the bot's
+  gating output). If the bot's output is the most recent activity,
+  user comments are treated as historical noise and the comment id is
+  seeded without firing — protecting against pre-rollout backlog
+  re-architecting an approved decomposition. The
+  `awaiting-human-reply` gate (Triage/Backlog) always fires on first
+  observation since the gate itself is bot-set.
 - **No re-trigger on `Awaiting approval` without a recognized label.**
   If an issue lands there outside the three label paths
   (`kind:final-pr` / `kind:decomposition` / `stuck`), it stays put and a
