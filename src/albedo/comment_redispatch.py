@@ -150,28 +150,28 @@ def redispatch_on_new_user_comments(
         prior_id = seen.get(issue.id)
         if prior_id == latest_id:
             continue
-        if prior_id is None and issue.state_name == 'Awaiting approval':
-            # Awaiting approval: rollout protection. Without the
-            # last-bot-comment check this branch swallows every first
-            # reply on a freshly-gated issue (the comment is genuinely
-            # new, but `prior_id is None` because the issue had never
-            # been inspected before). Compare timestamps: if the user
-            # commented *after* the bot's most recent output, that's a
-            # real reply to the gating proposal — fire. Otherwise the
-            # latest activity is the bot's (rollout-era backlog or
-            # nothing-newer-than-the-gate), so seed-without-fire to
-            # avoid re-architecting on stale comments.
-            #
-            # The `awaiting-human-reply` gate (Triage/Backlog) is fresh
-            # by construction — the bot just set the label — so we fire
-            # on first observation there. No rollout risk because the
-            # gate didn't exist before this feature shipped.
-            if not _user_replied_after_last_bot_comment(
-                raw_comments, bot_user_ids
-            ):
-                seen[issue.id] = latest_id
-                seeded.append(issue.identifier)
-                continue
+        # Awaiting approval: rollout protection. Without the
+        # last-bot-comment check this branch swallows every first reply
+        # on a freshly-gated issue (the comment is genuinely new, but
+        # `prior_id is None` because the issue had never been inspected
+        # before). Compare timestamps: if the user commented *after* the
+        # bot's most recent output, that's a real reply to the gating
+        # proposal — fire. Otherwise the latest activity is the bot's
+        # (rollout-era backlog or nothing-newer-than-the-gate), so
+        # seed-without-fire to avoid re-architecting on stale comments.
+        #
+        # The `awaiting-human-reply` gate (Triage/Backlog) is fresh by
+        # construction — the bot just set the label — so we fire on
+        # first observation there. No rollout risk because the gate
+        # didn't exist before this feature shipped.
+        if (
+            prior_id is None
+            and issue.state_name == 'Awaiting approval'
+            and not _user_replied_after_last_bot_comment(raw_comments, bot_user_ids)
+        ):
+            seen[issue.id] = latest_id
+            seeded.append(issue.identifier)
+            continue
         if triage_fn is not None and not _passes_triage(
             issue=issue,
             raw_comments=raw_comments,
