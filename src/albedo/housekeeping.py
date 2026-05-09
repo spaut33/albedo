@@ -42,6 +42,7 @@ from albedo.linear_client import (
 from albedo.worker import (
     CANCELLED_BY_HUMAN_LABEL,
     find_pr_url_in_comments,
+    log_state_transition,
     release_claim_assignee,
 )
 from albedo.worktree import (
@@ -241,10 +242,22 @@ def release_decomposed_children(
                     )
                     continue
                 linear.update_issue(child.id, IssueUpdate(state_id=cancelled_state_id))
+                log_state_transition(
+                    child.identifier,
+                    'Triage',
+                    'Canceled',
+                    reason='cancelled-by-human label',
+                )
                 cancelled.append(child)
                 any_cancelled_for_parent.append(child)
                 continue
             linear.update_issue(child.id, IssueUpdate(state_id=backlog_state_id))
+            log_state_transition(
+                child.identifier,
+                'Triage',
+                'Backlog',
+                reason=f'decomposition approved (parent {parent.identifier})',
+            )
             released.append(child)
             any_released_for_parent.append(child)
         if any_released_for_parent or any_cancelled_for_parent:
@@ -264,12 +277,6 @@ def release_decomposed_children(
             linear.add_comment(
                 parent.id,
                 '**housekeeping**: Decomposition approved — ' + '; '.join(parts) + '.',
-            )
-            log.info(
-                'parent %s: released=%d cancelled=%d',
-                parent.identifier,
-                len(any_released_for_parent),
-                len(any_cancelled_for_parent),
             )
     return DecompositionReleaseReport(
         parents_processed=len(parents),
@@ -322,10 +329,11 @@ def complete_decompositions_when_children_done(
             '**housekeeping**: All decomposition children finished — closing parent.',
         )
         completed.append(parent)
-        log.info(
-            'decomposition rollup: %s closed (all %d children finished)',
+        log_state_transition(
             parent.identifier,
-            len(children),
+            'Todo',
+            'Done',
+            reason=f'decomposition rollup, {len(children)} children',
         )
     return DecompositionRollupReport(parents_completed=completed)
 
@@ -443,12 +451,11 @@ def sync_merged_prs_to_done(
             )
             continue
         moved.append(issue)
-        log.info(
-            'merge sync: %s moved to Done (PR %s/%s#%d merged)',
+        log_state_transition(
             issue.identifier,
-            owner,
-            repo,
-            number,
+            'Awaiting approval',
+            'Done',
+            reason=f'PR {owner}/{repo}#{number} merged',
         )
 
     return MergedPrReleaseReport(inspected=len(candidates), moved_to_done=moved)

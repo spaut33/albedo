@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from albedo.heartbeat import heartbeat_path, touch_heartbeat
 from albedo.housekeeping import recover_stale_claims
 from albedo.linear_client import Issue, IssueUpdate
@@ -361,7 +363,9 @@ _DEFAULT_STATES = {
 }
 
 
-def test_release_decomposed_children_moves_triage_to_backlog() -> None:
+def test_release_decomposed_children_moves_triage_to_backlog(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     parents = [_parent(label_ids=('lab-kind-decomp',))]
     children = {
         'uuid-parent': [
@@ -376,7 +380,8 @@ def test_release_decomposed_children_moves_triage_to_backlog() -> None:
         team_states=_DEFAULT_STATES,
     )
 
-    report = release_decomposed_children(linear=fake, team_id='t1')  # type: ignore[arg-type]
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        report = release_decomposed_children(linear=fake, team_id='t1')  # type: ignore[arg-type]
 
     assert report.parents_processed == 1
     assert [c.identifier for c in report.children_released] == ['AI-51', 'AI-52']
@@ -385,6 +390,15 @@ def test_release_decomposed_children_moves_triage_to_backlog() -> None:
         assert update.state_id == 'state-backlog'
     assert fake.comments[0][0] == 'uuid-parent'
     assert 'AI-51' in fake.comments[0][1]
+    # Each child move emits its own Triage -> Backlog line.
+    assert (
+        'AI-51: Triage -> Backlog (decomposition approved (parent AI-50))'
+        in caplog.messages
+    )
+    assert (
+        'AI-52: Triage -> Backlog (decomposition approved (parent AI-50))'
+        in caplog.messages
+    )
 
 
 def test_release_decomposed_children_idempotent_when_already_in_backlog() -> None:
@@ -406,15 +420,22 @@ def test_release_decomposed_children_idempotent_when_already_in_backlog() -> Non
     assert fake.comments == []
 
 
-def test_release_decomposed_children_skips_when_no_backlog_state() -> None:
+def test_release_decomposed_children_skips_when_no_backlog_state(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     parents = [_parent(label_ids=('lab-kind-decomp',))]
     fake = _WatcherFakeLinear(
         parents=parents,
-        children_by_parent={'uuid-parent': []},
+        children_by_parent={'uuid-parent': [_child(suffix='51')]},
         team_states={'Triage': 'state-triage'},  # no Backlog
     )
-    report = release_decomposed_children(linear=fake, team_id='t1')  # type: ignore[arg-type]
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        report = release_decomposed_children(linear=fake, team_id='t1')  # type: ignore[arg-type]
     assert report.children_released == []
+    # Negative path: when the target state is missing, no transition log
+    # line should be emitted.
+    assert not any(' -> Backlog' in m for m in caplog.messages)
+    assert not any(' -> Canceled' in m for m in caplog.messages)
 
 
 def test_release_decomposed_children_cancels_human_marked_child() -> None:
@@ -475,7 +496,9 @@ from albedo.housekeeping import (  # noqa: E402
 )
 
 
-def test_rollup_closes_parent_when_all_children_finished() -> None:
+def test_rollup_closes_parent_when_all_children_finished(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     parents = [_parent(label_ids=('lab-kind-decomp',))]
     children = {
         'uuid-parent': [
@@ -490,7 +513,8 @@ def test_rollup_closes_parent_when_all_children_finished() -> None:
         team_states=_DEFAULT_STATES,
     )
 
-    report = complete_decompositions_when_children_done(linear=fake, team_id='t1')  # type: ignore[arg-type]
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        report = complete_decompositions_when_children_done(linear=fake, team_id='t1')  # type: ignore[arg-type]
 
     assert [p.identifier for p in report.parents_completed] == ['AI-50']
     assert fake.updates == [('uuid-parent', IssueUpdate(state_id='state-done'))]
@@ -498,6 +522,7 @@ def test_rollup_closes_parent_when_all_children_finished() -> None:
     parent_id, body = fake.comments[0]
     assert parent_id == 'uuid-parent'
     assert 'All decomposition children finished' in body
+    assert 'AI-50: Todo -> Done (decomposition rollup, 3 children)' in caplog.messages
 
 
 def test_rollup_leaves_parent_when_a_child_still_unfinished() -> None:
