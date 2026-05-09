@@ -385,6 +385,76 @@ def test_unknown_tool_returns_jsonrpc_method_not_found(tmp_path: Path) -> None:
     error: Any = response['error']
     assert isinstance(error, dict)
     assert error['code'] == -32601
+    audit_lines = audit_log_path(tmp_path).read_text('utf-8').splitlines()
+    assert len(audit_lines) == 1
+    entry: dict[str, Any] = json.loads(audit_lines[0])
+    assert entry['outcome'] == 'refused'
+    assert entry['tool'] == 'github.delete_repo'
+
+
+def test_get_job_logs_follows_redirect_to_log_storage(tmp_path: Path) -> None:
+    """GitHub returns 302 → S3 for job logs; the proxy must follow it."""
+    config = _make_config(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == 'api.github.com' or request.url.path.startswith(
+            f'/repos/{_OWNER}/{_REPO}/actions/jobs/'
+        ):
+            return httpx.Response(
+                302,
+                headers={
+                    'Location': 'https://logs.example.com/blob?token=abc',
+                },
+            )
+        assert request.url.host == 'logs.example.com'
+        return httpx.Response(200, text='log line one\nlog line two\n')
+
+    transport, seen = _make_recording_transport(handler)
+    with _open_client(config, transport) as client:
+        response = handle_tool_call(
+            request_id=1,
+            params={
+                'name': 'get_job_logs',
+                'arguments': {
+                    'owner': _OWNER,
+                    'repo': _REPO,
+                    'job_id': 99,
+                },
+            },
+            config=config,
+            client=client,
+        )
+
+    assert len(seen) == 2, 'expected redirect to be followed'
+    envelope = _result(response)
+    assert envelope['isError'] is False
+    assert 'log line one' in _content_text(envelope)
+
+
+def test_transport_failure_records_error_outcome(tmp_path: Path) -> None:
+    """An httpx.HTTPError surfaces as a structured tool error + audit row."""
+    config = _make_config(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError('connection refused', request=request)
+
+    transport = httpx.MockTransport(handler)
+    with _open_client(config, transport) as client:
+        response = handle_tool_call(
+            request_id=1,
+            params={
+                'name': 'list_pull_requests',
+                'arguments': {'owner': _OWNER, 'repo': _REPO},
+            },
+            config=config,
+            client=client,
+        )
+    envelope = _result(response)
+    assert envelope['isError'] is True
+    assert 'github transport error' in _content_text(envelope)
+    entry: dict[str, Any] = json.loads(audit_log_path(tmp_path).read_text('utf-8'))
+    assert entry['outcome'] == 'error'
+    assert entry['tool'] == 'github.list_pull_requests'
 
 
 # ----------------------------------------------------- Stdio loop / serve
