@@ -223,11 +223,37 @@ def _build_args(
     return args
 
 
-def _merged_env(extra_env: Mapping[str, str] | None) -> Mapping[str, str] | None:
-    if extra_env is None:
-        return None
-    merged = dict(os.environ)
-    merged.update(extra_env)
+# Tokens that must never reach the spawned `claude -p`: the bundled MCP
+# proxies hold them in-process, and a leak into claude's env defeats the
+# whole point of routing GitHub/Linear traffic through the proxies.
+# Stripping unconditionally (even when no extra_env is passed) hardens the
+# default path against a `claude -p` invocation that forgets to scrub.
+_TOKEN_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        'GITHUB_PERSONAL_ACCESS_TOKEN',
+        'GH_TOKEN',
+        'LINEAR_API_KEY',
+    }
+)
+_TOKEN_ENV_PREFIXES: tuple[str, ...] = ('LINEAR_API_KEY_',)
+
+
+def _is_token_env_key(key: str) -> bool:
+    return key in _TOKEN_ENV_KEYS or any(key.startswith(p) for p in _TOKEN_ENV_PREFIXES)
+
+
+def _merged_env(extra_env: Mapping[str, str] | None) -> Mapping[str, str]:
+    """Return the env passed to the spawned `claude -p`.
+
+    Always strips token env vars (GitHub PAT, `GH_TOKEN`, `LINEAR_API_KEY`
+    and per-agent `LINEAR_API_KEY_*` variants) from the inherited
+    `os.environ` so credential isolation is structural, not contingent on
+    the caller. `extra_env` is layered on top — callers can still inject
+    `ALBEDO_*` proxy plumbing without re-introducing tokens.
+    """
+    merged = {k: v for k, v in os.environ.items() if not _is_token_env_key(k)}
+    if extra_env is not None:
+        merged.update(extra_env)
     return merged
 
 

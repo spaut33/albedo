@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import sys
 import time
 from collections.abc import Callable, Iterable
@@ -430,32 +431,35 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             'Stdio MCP proxy exposing a project-scoped Linear surface to a '
             'spawned claude. Holds LINEAR_API_KEY in-process; refuses calls '
-            "outside the bound issue's scope."
+            "outside the bound issue's scope. Required values may be passed "
+            'as CLI flags or via ALBEDO_ISSUE_IDENTIFIER / ALBEDO_ISSUE_UUID '
+            '/ ALBEDO_AGENT_ID / ALBEDO_PROJECT_ID / ALBEDO_STATE_DIR env '
+            'vars (the worker sets these so mcp-servers.json can omit args).'
         ),
     )
     parser.add_argument(
         '--issue-identifier',
-        required=True,
+        default=None,
         help='Linear shorthand identifier of the bound issue (e.g. "AI-73").',
     )
     parser.add_argument(
         '--issue-uuid',
-        required=True,
+        default=None,
         help='Linear UUID of the bound issue.',
     )
     parser.add_argument(
         '--agent-id',
-        required=True,
+        default=None,
         help='Worker/agent id used for per-agent token override and audit.',
     )
     parser.add_argument(
         '--project-id',
-        required=True,
+        default=None,
         help='Linear project UUID; surfaced in scope-denied errors.',
     )
     parser.add_argument(
         '--state-dir',
-        required=True,
+        default=None,
         type=Path,
         help='State directory; audit log lands at <state-dir>/logs/mcp-audit.jsonl.',
     )
@@ -467,6 +471,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class _MissingArgError(RuntimeError):
+    """Raised when a required arg is missing on both CLI and env."""
+
+
+def _arg_or_env(value: object, env_var: str, flag: str) -> str:
+    """Return CLI `value` if truthy, else `os.environ[env_var]`.
+
+    Lets the worker pass per-spawn values (issue id, agent id, etc.) via
+    inherited env vars instead of patching them into mcp-servers.json
+    args. Raises a structured error so the caller emits one diagnostic
+    line on stderr instead of an argparse traceback.
+    """
+    if value:
+        return str(value)
+    fallback = os.environ.get(env_var, '').strip()
+    if fallback:
+        return fallback
+    raise _MissingArgError(f'{flag} (or {env_var} env var) is required')
+
+
 def _resolve_api_key(agent_id: str) -> SecretStr:
     return load_linear_api_key(agent_id=agent_id)
 
@@ -474,7 +498,21 @@ def _resolve_api_key(agent_id: str) -> SecretStr:
 def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     try:
-        api_key = _resolve_api_key(args.agent_id)
+        issue_identifier = _arg_or_env(
+            args.issue_identifier,
+            'ALBEDO_ISSUE_IDENTIFIER',
+            '--issue-identifier',
+        )
+        issue_uuid = _arg_or_env(args.issue_uuid, 'ALBEDO_ISSUE_UUID', '--issue-uuid')
+        agent_id = _arg_or_env(args.agent_id, 'ALBEDO_AGENT_ID', '--agent-id')
+        project_id = _arg_or_env(args.project_id, 'ALBEDO_PROJECT_ID', '--project-id')
+        state_dir = Path(_arg_or_env(args.state_dir, 'ALBEDO_STATE_DIR', '--state-dir'))
+    except _MissingArgError as exc:
+        print(f'albedo-mcp-linear-proxy: {exc}', file=sys.stderr)
+        return 2
+
+    try:
+        api_key = _resolve_api_key(agent_id)
     except RuntimeError as exc:
         print(
             f'albedo-mcp-linear-proxy: {LINEAR_API_KEY_ENV} not configured — {exc}',
@@ -483,11 +521,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 2
 
     context = ProxyContext(
-        issue_identifier=args.issue_identifier,
-        issue_uuid=args.issue_uuid,
-        agent_id=args.agent_id,
-        project_id=args.project_id,
-        state_dir=args.state_dir,
+        issue_identifier=issue_identifier,
+        issue_uuid=issue_uuid,
+        agent_id=agent_id,
+        project_id=project_id,
+        state_dir=state_dir,
     )
     with LinearClient(args.api_url, api_key) as client:
         handler = LinearProxyHandler(client, context)

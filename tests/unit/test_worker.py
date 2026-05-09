@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from pydantic import SecretStr
 
 from albedo import worker as worker_mod
 from albedo.claude_runner import ClaudeRunResult
@@ -185,34 +184,57 @@ def _issue() -> Issue:
     )
 
 
-def test_build_mcp_extra_env_prefers_process_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv('GITHUB_PERSONAL_ACCESS_TOKEN', 'ghp_from_shell')
-    env = build_mcp_extra_env(SecretStr('ghp_from_dotenv'))
+def test_build_mcp_extra_env_sets_albedo_proxy_vars(tmp_path: Path) -> None:
+    env = build_mcp_extra_env(
+        repo_root=tmp_path / 'repo',
+        state_dir=tmp_path / 'state',
+        issue_identifier='AI-5',
+        issue_uuid='uuid-1',
+        agent_id='1',
+        project_id='proj-1',
+    )
     assert env == {
-        'GITHUB_PERSONAL_ACCESS_TOKEN': 'ghp_from_shell',
-        'GH_TOKEN': 'ghp_from_shell',
+        'ALBEDO_REPO_ROOT': str(tmp_path / 'repo'),
+        'ALBEDO_STATE_DIR': str(tmp_path / 'state'),
+        'ALBEDO_ISSUE_IDENTIFIER': 'AI-5',
+        'ALBEDO_ISSUE_UUID': 'uuid-1',
+        'ALBEDO_AGENT_ID': '1',
+        'ALBEDO_PROJECT_ID': 'proj-1',
     }
 
 
-def test_build_mcp_extra_env_falls_back_to_dotenv(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv('GITHUB_PERSONAL_ACCESS_TOKEN', raising=False)
-    env = build_mcp_extra_env(SecretStr('ghp_from_dotenv'))
-    assert env == {
-        'GITHUB_PERSONAL_ACCESS_TOKEN': 'ghp_from_dotenv',
-        'GH_TOKEN': 'ghp_from_dotenv',
-    }
+def test_build_mcp_extra_env_omits_project_when_unset(tmp_path: Path) -> None:
+    env = build_mcp_extra_env(
+        repo_root=tmp_path / 'repo',
+        state_dir=tmp_path / 'state',
+        issue_identifier='AI-5',
+        issue_uuid='uuid-1',
+        agent_id='1',
+        project_id=None,
+    )
+    assert 'ALBEDO_PROJECT_ID' not in env
 
 
-def test_build_mcp_extra_env_returns_empty_when_no_pat(
+def test_build_mcp_extra_env_does_not_forward_tokens(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv('GITHUB_PERSONAL_ACCESS_TOKEN', raising=False)
-    assert build_mcp_extra_env(None) == {}
-    assert build_mcp_extra_env(SecretStr('   ')) == {}
+    """The proxies hold tokens in-process; the worker must not re-add them."""
+    monkeypatch.setenv('GITHUB_PERSONAL_ACCESS_TOKEN', 'ghp_secret')
+    monkeypatch.setenv('LINEAR_API_KEY', 'lin_secret')
+    monkeypatch.setenv('LINEAR_API_KEY_1', 'lin_secret_agent')
+    env = build_mcp_extra_env(
+        repo_root=tmp_path / 'repo',
+        state_dir=tmp_path / 'state',
+        issue_identifier='AI-5',
+        issue_uuid='uuid-1',
+        agent_id='1',
+        project_id='proj-1',
+    )
+    assert 'GITHUB_PERSONAL_ACCESS_TOKEN' not in env
+    assert 'GH_TOKEN' not in env
+    assert 'LINEAR_API_KEY' not in env
+    assert 'LINEAR_API_KEY_1' not in env
 
 
 class _LoopFakeLinear:

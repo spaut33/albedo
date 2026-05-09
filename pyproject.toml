@@ -18,6 +18,8 @@ dependencies = [
 
 [project.scripts]
 albedo = 'albedo.__main__:main'
+albedo-mcp-github-proxy = 'albedo.mcp_github_proxy:main'
+albedo-mcp-linear-proxy = 'albedo.mcp_linear_proxy:main'
 
 [build-system]
 requires = ['hatchling']

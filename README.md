@@ -193,8 +193,19 @@ explicitly by `albedo init`):
   `LINEAR_API_KEY_<AGENT_ID>` (e.g. `LINEAR_API_KEY_1`,
   `LINEAR_API_KEY_2`) so each worker can authenticate as its own Linear
   user.
-- `GITHUB_PERSONAL_ACCESS_TOKEN` — required for the GitHub MCP server
-  used by Coder and Reviewer. A classic PAT with `repo` scope is enough.
+- `GITHUB_PERSONAL_ACCESS_TOKEN` — required. A classic PAT with `repo`
+  scope is enough.
+
+Both secrets are read **only** by Albedo's own processes — the
+supervisor, the worker, and the bundled in-tree MCP proxies
+(`albedo-mcp-github-proxy`, `albedo-mcp-linear-proxy`). They are
+**never** placed in the environment of the spawned `claude -p`
+process: `mcp-servers.json` registers the proxies with no
+`${GITHUB_PERSONAL_ACCESS_TOKEN}` / `${LINEAR_API_KEY}` substitutions,
+and `claude_runner._merged_env` strips both keys (and per-agent
+`LINEAR_API_KEY_*` variants) from the inherited env. The proxies hold
+the credentials in-process and gate every outbound call by repo /
+project scope, so a prompt-injected claude cannot exfiltrate them.
 
 ## Logging
 
