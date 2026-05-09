@@ -98,11 +98,28 @@ def test_sparkline_low_activity_with_color_override_has_no_red_cells() -> None:
 def test_sparkline_sparse_series_renders_continuous_trace() -> None:
     # AI-80 AC: with a sparse interior (e.g. [0, 1, 0, 2, 0, 1]) and a
     # non-None color, every data position must render a glyph rather than
-    # collapsing zero buckets to literal spaces.
+    # collapsing zero buckets to literal spaces. AI-108 additionally
+    # requires the baseline glyph to sit on the bottom row of the Braille
+    # cell (matching SPARK_BLOCKS[0]'s y-position) and remain dim.
     text = widgets.sparkline([0, 1, 0, 2, 0, 1], width=6, color='cyan')
     assert ' ' not in text.plain
     allowed = {widgets.SPARK_BASELINE, *widgets.SPARK_BLOCKS}
     assert all(ch in allowed for ch in text.plain)
+    baseline = widgets.SPARK_BASELINE
+    zero_spans = [
+        span for span in text.spans if text.plain[span.start : span.end] == baseline
+    ]
+    assert zero_spans, 'sparse series should emit at least one baseline cell'
+    assert all(span.style == 'dim' for span in zero_spans)
+
+
+def test_spark_baseline_is_bottom_row_glyph_not_legacy_codepoint() -> None:
+    # AI-108 negative path: lock in the bottom-row baseline against an
+    # accidental revert to U+2824 ('⠤', dots 3,6), which sits in the
+    # second-from-bottom row and made sparse traces visually float above
+    # the SPARK_BLOCKS[0] floor.
+    assert widgets.SPARK_BASELINE != '⠤'
+    assert widgets.SPARK_BLOCKS[0] == widgets.SPARK_BASELINE
 
 
 def _capture_with_links(renderable: object, width: int = 80) -> str:
