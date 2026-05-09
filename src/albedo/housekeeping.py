@@ -342,7 +342,7 @@ def _list_decomposition_parents_approved(
     filt: dict[str, Any] = {
         'team': {'id': {'eq': team_id}},
         'labels': {'name': {'eq': 'kind:decomposition'}},
-        'state': {'type': {'eq': 'unstarted'}},
+        'state': {'name': {'eq': 'Todo'}, 'type': {'eq': 'unstarted'}},
     }
     if project_id is not None:
         filt['project'] = {'id': {'eq': project_id}}

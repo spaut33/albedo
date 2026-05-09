@@ -45,6 +45,7 @@ class LabelSpec:
 REQUIRED_STATES: tuple[StateSpec, ...] = (
     StateSpec('Triage', 'unstarted', '#f7c8c8'),
     StateSpec('Backlog', 'backlog', '#bec2c8'),
+    StateSpec('Todo', 'unstarted', '#e2e8f0'),
     StateSpec('In Progress', 'started', '#7c3aed'),
     StateSpec('Review', 'started', '#5e6ad2'),
     StateSpec('Awaiting approval', 'started', '#f2c94c'),
