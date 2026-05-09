@@ -30,13 +30,14 @@ class StatsContext:
 
 def session_summary(ctx: StatsContext, *, now_unix: int | None = None) -> str:
     """Compact one-liner for the TUI header, derived from usage.db."""
+    now = now_unix if now_unix is not None else int(time.time())
     stats = _cached(
         ctx,
         slot='_last_session',
-        window_seconds=int(time.time()) - ctx.session_started_at_unix,
+        window_seconds=now - ctx.session_started_at_unix,
         now_unix=now_unix,
     )
-    elapsed = _format_elapsed(time.time() - ctx.session_started_at_unix)
+    elapsed = _format_elapsed(now - ctx.session_started_at_unix)
     return f'session {elapsed} · done {stats.done} · fail {stats.failed}'
 
 
@@ -51,10 +52,11 @@ def daily_summary(ctx: StatsContext, *, now_unix: int | None = None) -> str:
 
 
 def session_cost_usd(ctx: StatsContext, *, now_unix: int | None = None) -> float:
+    now = now_unix if now_unix is not None else int(time.time())
     stats = _cached(
         ctx,
         slot='_last_session',
-        window_seconds=int(time.time()) - ctx.session_started_at_unix,
+        window_seconds=now - ctx.session_started_at_unix,
         now_unix=now_unix,
     )
     return float(stats.cost_usd)
