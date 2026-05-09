@@ -84,6 +84,25 @@ from albedo.worktree import (
 
 log = logging.getLogger(__name__)
 
+
+def log_state_transition(
+    issue_identifier: str,
+    from_state: str,
+    to_state: str,
+    *,
+    reason: str = '',
+) -> None:
+    """Emit a uniform `<ID>: <From> -> <To>` log line for state changes.
+
+    A single helper across worker and housekeeping keeps the events
+    panel scannable: every Linear state move shows up in the same shape.
+    `reason` is rendered as a parenthesised suffix when non-empty; keep
+    it short (~80 chars) so the line stays readable.
+    """
+    suffix = f' ({reason})' if reason else ''
+    log.info('%s: %s -> %s%s', issue_identifier, from_state, to_state, suffix)
+
+
 ATTEMPTS_LABEL_PATTERN = re.compile(r'^attempts:(\d+)$')
 PR_URL_PATTERN = re.compile(r'PR:\s*(https?://github\.com/[^\s/]+/[^\s/]+/pull/\d+)')
 VERDICT_PATTERN = re.compile(
@@ -1059,7 +1078,7 @@ def _enter_in_progress(
     )
     write_claim_manifest(claim_manifest_path(state_dir, agent_id), manifest)
     linear.update_issue(issue.id, IssueUpdate(state_id=in_progress_id))
-    log.info('%s -> In Progress', issue.identifier)
+    log_state_transition(issue.identifier, issue.state_name, IN_PROGRESS_STATE_NAME)
     return manifest
 
 
@@ -1303,10 +1322,11 @@ def _post_spawn_coder(
                     unset_assignee=True,
                 ),
             )
-            log.info(
-                '%s -> %s (coder blocked)',
+            log_state_transition(
                 issue.identifier,
+                issue.state_name,
                 role.target_state_on_blocker,
+                reason='coder blocked (clarifying question)',
             )
             return pr_url, True
         # Silent failure (max_turns / timeout / no-PR / generic error). Bump
@@ -1336,10 +1356,11 @@ def _post_spawn_coder(
                     unset_assignee=True,
                 ),
             )
-            log.info(
-                '%s coder failed %d runs -> Awaiting approval (stuck)',
+            log_state_transition(
                 issue.identifier,
-                next_attempts,
+                issue.state_name,
+                'Awaiting approval',
+                reason=f'coder failed {next_attempts} runs (stuck)',
             )
             return pr_url, True
         new_labels = _set_attempts_label(issue.label_ids, label_lookup, next_attempts)
@@ -1351,12 +1372,14 @@ def _post_spawn_coder(
                 unset_assignee=True,
             ),
         )
-        log.info(
-            '%s -> %s (coder blocked, attempts=%d/%d)',
+        log_state_transition(
             issue.identifier,
+            issue.state_name,
             role.target_state_on_blocker,
-            next_attempts,
-            max_attempts_before_escalation,
+            reason=(
+                f'coder blocked, attempts={next_attempts}/'
+                f'{max_attempts_before_escalation}'
+            ),
         )
         return pr_url, True
 
@@ -1385,10 +1408,11 @@ def _post_spawn_coder(
                 issue.id,
                 IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
             )
-            log.info(
-                '%s coder no-op (origin %s unchanged) -> Awaiting approval (stuck)',
+            log_state_transition(
                 issue.identifier,
-                branch_state.branch,
+                issue.state_name,
+                'Awaiting approval',
+                reason=f'coder no-op on {branch_state.branch} (stuck)',
             )
             return pr_url, True
 
@@ -1400,11 +1424,11 @@ def _post_spawn_coder(
     # issue. `list_pickup_issues` filters by `assignee = null`; without this
     # step the issue would sit in Review forever with the Coder's assignee.
     linear.update_issue(issue.id, IssueUpdate(state_id=target, unset_assignee=True))
-    log.info(
-        '%s -> %s; PR %s',
+    log_state_transition(
         issue.identifier,
+        issue.state_name,
         role.target_state_on_success,
-        pr_url,
+        reason=f'PR {pr_url}',
     )
     return pr_url, True
 
@@ -1463,10 +1487,14 @@ def _post_spawn_reviewer(
                 issue.id,
                 IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
             )
-            log.info(
-                '%s reviewer empty-range loop (sha %s) -> Awaiting approval (stuck)',
+            log_state_transition(
                 issue.identifier,
-                branch_state.pre_spawn_origin_sha,
+                issue.state_name,
+                'Awaiting approval',
+                reason=(
+                    'reviewer empty-range sha='
+                    f'{branch_state.pre_spawn_origin_sha} (stuck)'
+                ),
             )
             return None, True
 
@@ -1481,10 +1509,11 @@ def _post_spawn_reviewer(
         if target is None:
             return None, False
         linear.update_issue(issue.id, IssueUpdate(state_id=target, unset_assignee=True))
-        log.info(
-            '%s -> %s (reviewer blocked)',
+        log_state_transition(
             issue.identifier,
+            issue.state_name,
             role.target_state_on_blocker,
+            reason='reviewer blocked',
         )
         return None, True
 
@@ -1499,7 +1528,12 @@ def _post_spawn_reviewer(
             issue.id,
             IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
         )
-        log.info('%s APPROVE -> %s', issue.identifier, role.target_state_on_success)
+        log_state_transition(
+            issue.identifier,
+            issue.state_name,
+            role.target_state_on_success,
+            reason='APPROVE',
+        )
         return None, True
 
     # REQUEST_CHANGES path.
@@ -1521,10 +1555,11 @@ def _post_spawn_reviewer(
             issue.id,
             IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
         )
-        log.info(
-            '%s REQUEST_CHANGES (attempts=%d) -> Awaiting approval (stuck)',
+        log_state_transition(
             issue.identifier,
-            next_attempts,
+            issue.state_name,
+            'Awaiting approval',
+            reason=f'REQUEST_CHANGES attempts={next_attempts} (stuck)',
         )
         return None, True
 
@@ -1545,12 +1580,13 @@ def _post_spawn_reviewer(
             unset_assignee=True,
         ),
     )
-    log.info(
-        '%s REQUEST_CHANGES (attempts=%d/%d) -> %s',
+    log_state_transition(
         issue.identifier,
-        next_attempts,
-        max_attempts_before_escalation,
+        issue.state_name,
         role.target_state_on_blocker,
+        reason=(
+            f'REQUEST_CHANGES attempts={next_attempts}/{max_attempts_before_escalation}'
+        ),
     )
     return None, True
 
@@ -1802,10 +1838,11 @@ def _post_spawn_architect(
         if target is None:
             return None, False
         linear.update_issue(issue.id, IssueUpdate(state_id=target, unset_assignee=True))
-        log.info(
-            '%s -> %s (architect blocked)',
+        log_state_transition(
             issue.identifier,
+            issue.state_name,
             role.target_state_on_blocker,
+            reason='architect blocked',
         )
         return None, True
 
@@ -1817,13 +1854,15 @@ def _post_spawn_architect(
         )
         body = f'{prefix}CANCELLED: {reason}'
         linear.add_comment(issue.id, body)
-        target = states.get('Canceled')
+        target_name = 'Canceled'
+        target = states.get(target_name)
         if target is None:
             log.warning(
                 'Canceled state missing on team; falling back to %s',
                 role.target_state_on_blocker,
             )
-            target = states.get(role.target_state_on_blocker)
+            target_name = role.target_state_on_blocker
+            target = states.get(target_name)
             if target is None:
                 return None, False
         linear.update_issue(
@@ -1834,7 +1873,12 @@ def _post_spawn_architect(
                 label_ids=new_labels,
             ),
         )
-        log.info('%s CANCELLED: %s', issue.identifier, reason[:80])
+        log_state_transition(
+            issue.identifier,
+            issue.state_name,
+            target_name,
+            reason=f'cancel: {reason[:80]}',
+        )
         return None, True
 
     question = QUESTION_PATTERN.search(summary)
@@ -1858,11 +1902,11 @@ def _post_spawn_architect(
                 label_ids=new_labels,
             ),
         )
-        log.info(
-            '%s QUESTION -> %s: %s',
+        log_state_transition(
             issue.identifier,
+            issue.state_name,
             role.target_state_on_blocker,
-            text[:80],
+            reason=f'QUESTION: {text[:80]}',
         )
         return None, True
 
@@ -1897,11 +1941,11 @@ def _post_spawn_architect(
                 label_ids=new_labels,
             ),
         )
-        log.info(
-            '%s BLOCKED -> %s: %s',
+        log_state_transition(
             issue.identifier,
+            issue.state_name,
             role.target_state_on_blocker,
-            reason[:80],
+            reason=f'BLOCKED: {reason[:80]}',
         )
         return None, True
 
@@ -1917,10 +1961,11 @@ def _post_spawn_architect(
         if target is None:
             return None, False
         linear.update_issue(issue.id, IssueUpdate(state_id=target, unset_assignee=True))
-        log.info(
-            '%s -> %s (architect parse error)',
+        log_state_transition(
             issue.identifier,
+            issue.state_name,
             role.target_state_on_blocker,
+            reason='architect parse error',
         )
         return None, True
 
@@ -2015,11 +2060,11 @@ def _post_spawn_architect(
             label_ids=new_parent_labels,
         ),
     )
-    log.info(
-        '%s decomposed into %d children -> %s',
+    log_state_transition(
         issue.identifier,
-        len(created),
+        issue.state_name,
         role.target_state_on_success,
+        reason=f'decomposed into {len(created)} children',
     )
     return None, True
 

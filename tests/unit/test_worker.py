@@ -539,22 +539,24 @@ def test_run_once_happy_path_moves_to_review_and_comments(
     repo: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     captured: list[Mapping[str, object]] = []
     _stub_spawn(monkeypatch, captured=captured)
     cfg = _build_cfg(repo, tmp_path)
     fake = _FakeLinear(_issue())
 
-    result = run_once(
-        config=cfg,
-        linear=fake,  # type: ignore[arg-type]
-        issue_identifier='AI-5',
-        agent_id='1',
-        prompts_dir=bundled_prompts_dir(),
-        mcp_config_path=None,
-        cli='claude',
-        fetch=False,
-    )
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        result = run_once(
+            config=cfg,
+            linear=fake,  # type: ignore[arg-type]
+            issue_identifier='AI-5',
+            agent_id='1',
+            prompts_dir=bundled_prompts_dir(),
+            mcp_config_path=None,
+            cli='claude',
+            fetch=False,
+        )
 
     assert result.pr_url == 'https://github.com/me/sample/pull/3'
     assert result.linear_updated is True
@@ -565,6 +567,11 @@ def test_run_once_happy_path_moves_to_review_and_comments(
     update_target_id, update = fake.updates[0]
     assert update_target_id == 'uuid-1'
     assert getattr(update, 'state_id', None) == 'state-review'
+
+    assert (
+        'AI-5: Backlog -> Review (PR https://github.com/me/sample/pull/3)'
+        in caplog.messages
+    )
 
     prompt_text = cast('str', captured[0]['prompt'])
     assert 'AI-5' in prompt_text
@@ -1165,7 +1172,10 @@ def test_find_pr_url_in_comments() -> None:
 
 
 def test_reviewer_approve_moves_to_awaiting_approval_and_adds_kind_final_pr(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     _spawn_reviewer(monkeypatch, result_text='looks good\n\nVERDICT: APPROVE')
     cfg = _build_cfg(repo, tmp_path)
@@ -1182,16 +1192,17 @@ def test_reviewer_approve_moves_to_awaiting_approval_and_adds_kind_final_pr(
     # Pre-claim it so run_loop's path through run_claimed picks REVIEWER.
     fake._issue = _review_issue()  # type: ignore[attr-defined]
 
-    result = worker_mod.run_claimed(
-        config=cfg,
-        linear=fake,  # type: ignore[arg-type]
-        issue=fake._issue,  # type: ignore[attr-defined]
-        agent_id='1',
-        prompts_dir=bundled_prompts_dir(),
-        mcp_config_path=None,
-        github_pat=None,
-        cli='claude',
-    )
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        result = worker_mod.run_claimed(
+            config=cfg,
+            linear=fake,  # type: ignore[arg-type]
+            issue=fake._issue,  # type: ignore[attr-defined]
+            agent_id='1',
+            prompts_dir=bundled_prompts_dir(),
+            mcp_config_path=None,
+            github_pat=None,
+            cli='claude',
+        )
 
     assert result.role.role == 'REVIEWER'
     assert any(c[1].startswith('**agent-1**: REVIEW APPROVE') for c in fake.comments)
@@ -1202,10 +1213,14 @@ def test_reviewer_approve_moves_to_awaiting_approval_and_adds_kind_final_pr(
     label_ids = getattr(update, 'label_ids', None)
     assert label_ids is not None
     assert 'lab-final' in label_ids
+    assert 'AI-7: Review -> Awaiting approval (APPROVE)' in caplog.messages
 
 
 def test_reviewer_request_changes_increments_attempts_and_returns_to_backlog(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     _spawn_reviewer(
         monkeypatch,
@@ -1216,16 +1231,17 @@ def test_reviewer_request_changes_increments_attempts_and_returns_to_backlog(
         _review_issue(label_names=('attempts:1',), label_ids=('lab-att-1',))
     )
 
-    result = worker_mod.run_claimed(
-        config=cfg,
-        linear=fake,  # type: ignore[arg-type]
-        issue=fake._issue,  # type: ignore[attr-defined]
-        agent_id='2',
-        prompts_dir=bundled_prompts_dir(),
-        mcp_config_path=None,
-        github_pat=None,
-        cli='claude',
-    )
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        result = worker_mod.run_claimed(
+            config=cfg,
+            linear=fake,  # type: ignore[arg-type]
+            issue=fake._issue,  # type: ignore[attr-defined]
+            agent_id='2',
+            prompts_dir=bundled_prompts_dir(),
+            mcp_config_path=None,
+            github_pat=None,
+            cli='claude',
+        )
 
     assert result.role.role == 'REVIEWER'
     assert any('REQUEST_CHANGES (attempts=2/3)' in c[1] for c in fake.comments)
@@ -1236,6 +1252,7 @@ def test_reviewer_request_changes_increments_attempts_and_returns_to_backlog(
     assert label_ids is not None
     assert 'lab-att-2' in label_ids
     assert 'lab-att-1' not in label_ids
+    assert 'AI-7: Review -> Backlog (REQUEST_CHANGES attempts=2/3)' in caplog.messages
 
 
 def test_reviewer_request_changes_escalates_at_max_attempts(
@@ -2243,7 +2260,10 @@ def _triage_issue_with_awaiting_label() -> Issue:
 
 
 def test_architect_cancel_transitions_to_canceled(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     _spawn_architect(
         monkeypatch,
@@ -2252,16 +2272,17 @@ def test_architect_cancel_transitions_to_canceled(
     cfg = _build_cfg(repo, tmp_path)
     fake = _ArchitectFakeLinear(_triage_issue_with_awaiting_label())
 
-    worker_mod.run_claimed(
-        config=cfg,
-        linear=fake,  # type: ignore[arg-type]
-        issue=fake._issue,  # type: ignore[attr-defined]
-        agent_id='3',
-        prompts_dir=bundled_prompts_dir(),
-        mcp_config_path=None,
-        github_pat=None,
-        cli='claude',
-    )
+    with caplog.at_level('INFO', logger='albedo.worker'):
+        worker_mod.run_claimed(
+            config=cfg,
+            linear=fake,  # type: ignore[arg-type]
+            issue=fake._issue,  # type: ignore[attr-defined]
+            agent_id='3',
+            prompts_dir=bundled_prompts_dir(),
+            mcp_config_path=None,
+            github_pat=None,
+            cli='claude',
+        )
 
     assert fake.created_issues == []
     assert fake.archived == []
@@ -2273,6 +2294,9 @@ def test_architect_cancel_transitions_to_canceled(
     assert getattr(update, 'unset_assignee', False) is True
     label_ids = getattr(update, 'label_ids', ())
     assert 'lab-await-human' not in label_ids
+    assert any(
+        m.startswith('AI-50: Triage -> Canceled (cancel: ') for m in caplog.messages
+    )
 
 
 def test_architect_cancel_takes_priority_over_blocked(
