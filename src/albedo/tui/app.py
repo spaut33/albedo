@@ -21,7 +21,7 @@ from rich.live import Live
 
 from albedo.tui import widgets
 from albedo.tui.history import HistoryStore
-from albedo.tui.input import KEY_ESCAPE, KeyReader
+from albedo.tui.input import KEY_CTRL_K, KEY_ESCAPE, KeyReader
 from albedo.tui.layout import build_layout
 from albedo.tui.snapshot import LogTailer, aggregate
 
@@ -54,6 +54,7 @@ class TuiContext:
     daily_cost_provider: Callable[[], float] | None = None
     warnings_provider: Callable[[], str] | None = None
     shutdown_in_progress: Callable[[], bool] | None = None
+    terminate_worker: Callable[[str], bool] | None = None
     should_stop: Callable[[], bool] = field(default=lambda: False)
     token_cap: int = 0
     ledger: object | None = None
@@ -139,6 +140,15 @@ class TuiApp:
         for key in keystrokes:
             if key == KEY_ESCAPE:
                 self._state.focused_agent = None
+                continue
+            if key == KEY_CTRL_K:
+                focused = self._state.focused_agent
+                terminate = self._ctx.terminate_worker
+                if focused is not None and terminate is not None:
+                    try:
+                        terminate(focused)
+                    except Exception as exc:
+                        log.warning('TUI terminate_worker failed: %s', exc)
                 continue
             if key in {'p', 'P'}:
                 self._state.paused = not self._state.paused
