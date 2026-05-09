@@ -55,6 +55,14 @@ JSONRPC_METHOD_NOT_FOUND = -32601
 JSONRPC_INVALID_PARAMS = -32602
 JSONRPC_INTERNAL_ERROR = -32603
 
+
+class _BadArgsError(Exception):
+    """Raised by tool implementations on argument validation failure.
+
+    Caught in `_dispatch` so the audit outcome reflects bad-args, not ok.
+    """
+
+
 TOOLS: tuple[dict[str, Any], ...] = (
     {
         'name': 'linear_get_issue',
@@ -189,6 +197,9 @@ class LinearProxyHandler:
             try:
                 payload = impl(arguments)
                 outcome = OUTCOME_OK
+            except _BadArgsError as exc:
+                outcome = OUTCOME_BAD_ARGS
+                payload = _error_result(str(exc))
             except LinearError as exc:
                 outcome = OUTCOME_ERROR
                 payload = _error_result(f'Linear API error: {exc}')
@@ -206,7 +217,7 @@ class LinearProxyHandler:
     def _do_add_comment(self, arguments: dict[str, Any]) -> dict[str, Any]:
         body = arguments.get('body')
         if not isinstance(body, str) or not body.strip():
-            return _error_result("Missing or empty 'body' argument.")
+            raise _BadArgsError("Missing or empty 'body' argument.")
         comment_id = self._client.add_comment(arguments['issue_id'], body)
         return _ok_result({'comment_id': comment_id})
 
@@ -457,12 +468,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_api_key(agent_id: str) -> SecretStr:
-    """Resolve the Linear token, raising RuntimeError if neither key is set.
-
-    Re-uses `config.load_linear_api_key`, which already implements the
-    `LINEAR_API_KEY_<id>` → `LINEAR_API_KEY` fallback against process env
-    and `$ALBEDO_HOME/.env`.
-    """
     return load_linear_api_key(agent_id=agent_id)
 
 
