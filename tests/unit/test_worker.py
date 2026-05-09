@@ -703,6 +703,80 @@ def test_run_once_blocks_when_no_pr_url(
     assert 'lab-await-human' in label_ids
 
 
+def test_run_once_coder_no_op_push_escalates_to_human(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CODER reports PR success but never pushes new commits.
+
+    Without this guard the reviewer would re-read the same commit and
+    bounce the issue back to Backlog for another no-op CODER pass; the
+    fix mirrors AI-87's reviewer-side empty-range escalation.
+    """
+    _stub_spawn(monkeypatch, result_text='PR: https://github.com/me/sample/pull/3')
+
+    # Same origin SHA before and after spawn -> nothing was pushed.
+    def _stub_origin_sha(*_a: object, **_k: object) -> str:
+        return 'sha-pre'
+
+    monkeypatch.setattr(worker_mod, 'origin_branch_sha', _stub_origin_sha)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+
+    result = run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        fetch=False,
+    )
+
+    assert result.pr_url == 'https://github.com/me/sample/pull/3'
+    assert result.linear_updated is True
+    body = fake.comments[0][1]
+    assert 'pushed no new commits' in body
+    assert 'escalating to human' in body
+    _, update = fake.updates[0]
+    assert getattr(update, 'state_id', None) == 'state-await'
+    assert getattr(update, 'unset_assignee', False) is True
+    label_ids = getattr(update, 'label_ids', None)
+    assert label_ids is not None
+    assert 'lab-stuck' in label_ids
+
+
+def test_run_once_coder_first_push_skips_no_op_check(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First-iteration CODER (no prior origin SHA) takes the success path.
+
+    The no-op detector only fires when `origin/<branch>` had a SHA before
+    the spawn — otherwise we can't prove the agent failed to advance it.
+    """
+    _stub_spawn(monkeypatch, result_text='PR: https://github.com/me/sample/pull/3')
+
+    def _stub_origin_sha(*_a: object, **_k: object) -> str | None:
+        return None
+
+    monkeypatch.setattr(worker_mod, 'origin_branch_sha', _stub_origin_sha)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+
+    run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        fetch=False,
+    )
+
+    _, update = fake.updates[0]
+    assert getattr(update, 'state_id', None) == 'state-review'
+    assert fake.comments[0][1].startswith('**agent-1**: PR:')
+
+
 def test_run_claimed_records_pause_and_releases_on_usage_limit(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1091,14 +1165,35 @@ def test_reviewer_no_verdict_treated_as_blocker(
 def test_reviewer_empty_range_blocked_escalates_to_human(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _spawn_reviewer(
-        monkeypatch,
-        result_text='VERDICT: BLOCKED no new commits since prior review',
-    )
+    """Reviewer fired on the same SHA as the prior pass -> escalate.
+
+    The orchestrator detects this structurally now, by comparing the
+    pre-spawn `origin/<branch>` SHA against the SHA stamped in the
+    prior `REVIEW ...` comment, instead of grepping the model's output
+    for "no new commits since prior review".
+    """
+    _spawn_reviewer(monkeypatch, result_text='looking at the diff... no verdict')
+
+    def _stub_origin_sha(*_a: object, **_k: object) -> str:
+        return 'abc1234'
+
+    monkeypatch.setattr(worker_mod, 'origin_branch_sha', _stub_origin_sha)
     cfg = _build_cfg(repo, tmp_path)
     fake = _FakeLinear(
         _review_issue(label_names=('attempts:1',), label_ids=('lab-att-1',))
     )
+    from albedo.linear_client import Comment
+
+    fake.linear_comments = [
+        Comment(
+            id='c1',
+            body=(
+                '**agent-3**: REVIEW REQUEST_CHANGES (attempts=1/3).\n\n'
+                'prior findings\n\n<!--reviewed-sha:abc1234-->'
+            ),
+            author_id='u',
+        ),
+    ]
 
     worker_mod.run_claimed(
         config=cfg,
@@ -1106,13 +1201,14 @@ def test_reviewer_empty_range_blocked_escalates_to_human(
         issue=fake._issue,  # type: ignore[attr-defined]
         agent_id='4',
         prompts_dir=bundled_prompts_dir(),
-        mcp_config_path=None,
         github_pat=None,
         cli='claude',
+        mcp_config_path=None,
     )
 
     body = fake.comments[0][1]
-    assert 'no new commits since prior review' in body
+    assert 'same SHA as the prior review' in body
+    assert 'abc1234' in body
     assert 'escalating to human' in body
     _, update = fake.updates[0]
     assert getattr(update, 'state_id', None) == 'state-await'
@@ -1123,6 +1219,102 @@ def test_reviewer_empty_range_blocked_escalates_to_human(
     # Attempts label is preserved as-is, not incremented.
     assert 'lab-att-1' in label_ids
     assert 'lab-att-2' not in label_ids
+
+
+def test_reviewer_blocked_with_advanced_sha_routes_to_backlog(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Origin SHA differs from the prior review -> generic BLOCKED path.
+
+    Same setup as the empty-range test but the current SHA differs from
+    what the prior review stamped. The escalation must NOT fire — the
+    next CODER pass deserves a chance.
+    """
+    _spawn_reviewer(monkeypatch, result_text='no verdict here')
+
+    def _stub_origin_sha(*_a: object, **_k: object) -> str:
+        return 'def5678'
+
+    monkeypatch.setattr(worker_mod, 'origin_branch_sha', _stub_origin_sha)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_review_issue())
+    from albedo.linear_client import Comment
+
+    fake.linear_comments = [
+        Comment(
+            id='c1',
+            body=(
+                '**agent-3**: REVIEW REQUEST_CHANGES (attempts=1/3).\n\n'
+                '<!--reviewed-sha:abc1234-->'
+            ),
+            author_id='u',
+        ),
+    ]
+
+    worker_mod.run_claimed(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue=fake._issue,  # type: ignore[attr-defined]
+        agent_id='4',
+        prompts_dir=bundled_prompts_dir(),
+        github_pat=None,
+        cli='claude',
+        mcp_config_path=None,
+    )
+
+    _, update = fake.updates[0]
+    assert getattr(update, 'state_id', None) == 'state-backlog'
+    label_ids = getattr(update, 'label_ids', None)
+    if label_ids is not None:
+        assert 'lab-stuck' not in label_ids
+
+
+def test_reviewer_request_changes_stamps_reviewed_sha_marker(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REQUEST_CHANGES comment carries the SHA so the next pass can compare."""
+    _spawn_reviewer(monkeypatch, result_text='findings\n\nVERDICT: REQUEST_CHANGES')
+
+    def _stub_origin_sha(*_a: object, **_k: object) -> str:
+        return 'abc1234'
+
+    monkeypatch.setattr(worker_mod, 'origin_branch_sha', _stub_origin_sha)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_review_issue())
+
+    worker_mod.run_claimed(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue=fake._issue,  # type: ignore[attr-defined]
+        agent_id='2',
+        prompts_dir=bundled_prompts_dir(),
+        github_pat=None,
+        cli='claude',
+        mcp_config_path=None,
+    )
+
+    body = fake.comments[0][1]
+    assert '<!--reviewed-sha:abc1234-->' in body
+
+
+def test_latest_reviewed_sha_from_comments_picks_most_recent() -> None:
+    from albedo.linear_client import Comment
+
+    comments = [
+        Comment(
+            id='c1',
+            body='REVIEW APPROVE\n<!--reviewed-sha:aaa1111-->',
+            author_id='u',
+        ),
+        Comment(id='c2', body='unrelated comment', author_id='u'),
+        Comment(
+            id='c3',
+            body='REVIEW REQUEST_CHANGES\n<!--reviewed-sha:bbb2222-->',
+            author_id='u',
+        ),
+    ]
+    assert worker_mod.latest_reviewed_sha_from_comments(comments) == 'bbb2222'
+    assert worker_mod.latest_reviewed_sha_from_comments([]) is None
 
 
 def test_reviewer_generic_blocked_still_routes_to_backlog(

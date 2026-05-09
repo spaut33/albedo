@@ -80,6 +80,7 @@ from albedo.worktree import (
     branch_for_issue,
     default_credential_helper_command,
     ensure_worktree,
+    origin_branch_sha,
 )
 
 log = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ PR_URL_PATTERN = re.compile(r'PR:\s*(https?://github\.com/[^\s/]+/[^\s/]+/pull/\
 VERDICT_PATTERN = re.compile(
     r'^\s*VERDICT:\s*(APPROVE|REQUEST_CHANGES)\b', re.MULTILINE
 )
+REVIEWED_SHA_PATTERN = re.compile(r'<!--\s*reviewed-sha:([0-9a-f]{7,40})\s*-->')
 DECOMPOSITION_HEADER = re.compile(r'^\s*DECOMPOSITION:\s*$', re.MULTILINE)
 BLOCKED_PATTERN = re.compile(r'^\s*BLOCKED:\s*(.+?)\s*$', re.MULTILINE)
 QUESTION_PATTERN = re.compile(r'^\s*QUESTION:\s*(.+?)\s*\Z', re.MULTILINE | re.DOTALL)
@@ -111,6 +113,40 @@ class RunOnceResult:
     pr_url: str | None = None
     linear_updated: bool = False
     usage_limit_paused: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CoderBranchState:
+    """Branch state captured immediately before a CODER spawn.
+
+    The post-spawn check compares `pre_spawn_origin_sha` against the
+    refreshed `origin/<branch>` SHA after claude exits. When they match
+    on an iteration (pre-sha is not None), the agent reported PR success
+    without actually pushing any new commits — without this guard the
+    reviewer would get spawned, see no new commits, and loop until the
+    AI-87 empty-range escalation eventually fires.
+    """
+
+    worktree_path: Path
+    branch: str
+    pre_spawn_origin_sha: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewerBranchState:
+    """Branch state captured immediately before a REVIEWER spawn.
+
+    `pre_spawn_origin_sha` is the current `origin/<branch>` HEAD;
+    `last_reviewed_sha` is read from the most recent
+    `<!--reviewed-sha:SHA-->` marker in our prior REVIEW comments.
+    When they match on a non-error reviewer run with no APPROVE /
+    REQUEST_CHANGES verdict, the reviewer fired on the same SHA as
+    last time — escalate without depending on the model paraphrasing
+    "no new commits since prior review" verbatim.
+    """
+
+    pre_spawn_origin_sha: str | None
+    last_reviewed_sha: str | None
 
 
 def parse_pr_url(text: str) -> str | None:
@@ -143,6 +179,23 @@ def find_pr_url_in_comments(comments: list[Comment]) -> str | None:
         url = parse_pr_url(comment.body)
         if url is not None:
             return url
+    return None
+
+
+def latest_reviewed_sha_from_comments(comments: list[Comment]) -> str | None:
+    """Return the SHA of the most recent `<!--reviewed-sha:SHA-->` marker.
+
+    Stamped by `_post_spawn_reviewer` on every successful APPROVE /
+    REQUEST_CHANGES comment. Pre-spawning the next reviewer, the
+    orchestrator compares this against the live `origin/<branch>` HEAD
+    to decide whether anything actually changed since the last pass —
+    a structural check that replaces the brittle regex match on the
+    model's "no new commits since prior review" wording.
+    """
+    for comment in reversed(comments):
+        match = REVIEWED_SHA_PATTERN.search(comment.body or '')
+        if match is not None:
+            return match.group(1)
     return None
 
 
@@ -680,6 +733,20 @@ def run_claimed(
 
         on_event = _publish
 
+    coder_branch_state: CoderBranchState | None = None
+    reviewer_branch_state: ReviewerBranchState | None = None
+    if role.role == 'CODER':
+        coder_branch_state = CoderBranchState(
+            worktree_path=worktree.path,
+            branch=worktree.branch,
+            pre_spawn_origin_sha=origin_branch_sha(worktree.path, worktree.branch),
+        )
+    elif role.role == 'REVIEWER':
+        reviewer_branch_state = ReviewerBranchState(
+            pre_spawn_origin_sha=origin_branch_sha(worktree.path, worktree.branch),
+            last_reviewed_sha=latest_reviewed_sha_from_comments(raw_comments or []),
+        )
+
     log.info('%s [%s] spawning claude', issue.identifier, role.role)
     spawn_started_at = time.time()
     claude = spawn_claude(
@@ -748,6 +815,8 @@ def run_claimed(
         agent_id=agent_id,
         enable_body_edits=config.features.agent_body_edits,
         max_attempts_before_escalation=config.max_attempts_before_escalation,
+        coder_branch_state=coder_branch_state,
+        reviewer_branch_state=reviewer_branch_state,
     )
     return RunOnceResult(
         issue=issue,
@@ -800,7 +869,7 @@ def run_once(
     if (
         config.features.user_comments_in_prompt
         or config.attachments.enabled
-        or role.role == 'CODER'
+        or role.role in ('CODER', 'REVIEWER')
     ):
         try:
             raw_comments = linear.list_comments(issue.id)
@@ -855,6 +924,20 @@ def run_once(
     )
     prompt = builder.build(role.prompt_template, context)
 
+    coder_branch_state: CoderBranchState | None = None
+    reviewer_branch_state: ReviewerBranchState | None = None
+    if role.role == 'CODER':
+        coder_branch_state = CoderBranchState(
+            worktree_path=worktree.path,
+            branch=worktree.branch,
+            pre_spawn_origin_sha=origin_branch_sha(worktree.path, worktree.branch),
+        )
+    elif role.role == 'REVIEWER':
+        reviewer_branch_state = ReviewerBranchState(
+            pre_spawn_origin_sha=origin_branch_sha(worktree.path, worktree.branch),
+            last_reviewed_sha=latest_reviewed_sha_from_comments(raw_comments),
+        )
+
     claude = spawn_claude(
         prompt,
         cwd=worktree.path,
@@ -879,6 +962,8 @@ def run_once(
         agent_id=agent_id,
         enable_body_edits=config.features.agent_body_edits,
         max_attempts_before_escalation=config.max_attempts_before_escalation,
+        coder_branch_state=coder_branch_state,
+        reviewer_branch_state=reviewer_branch_state,
     )
 
     return RunOnceResult(
@@ -1029,6 +1114,8 @@ def _post_spawn_linear_update(
     agent_id: str,
     enable_body_edits: bool = True,
     max_attempts_before_escalation: int = MAX_ATTEMPTS_BEFORE_ESCALATION,
+    coder_branch_state: CoderBranchState | None = None,
+    reviewer_branch_state: ReviewerBranchState | None = None,
 ) -> tuple[str | None, bool]:
     """Post-spawn Linear updates dispatched by role.
 
@@ -1057,6 +1144,7 @@ def _post_spawn_linear_update(
             states=states,
             agent_id=agent_id,
             max_attempts_before_escalation=max_attempts_before_escalation,
+            branch_state=reviewer_branch_state,
         )
     if role.role == 'ARCHITECT':
         return _post_spawn_architect(
@@ -1074,6 +1162,7 @@ def _post_spawn_linear_update(
         claude=claude,
         states=states,
         agent_id=agent_id,
+        branch_state=coder_branch_state,
     )
 
 
@@ -1131,6 +1220,7 @@ def _post_spawn_coder(
     claude: ClaudeRunResult,
     states: dict[str, str],
     agent_id: str,
+    branch_state: CoderBranchState | None = None,
 ) -> tuple[str | None, bool]:
     pr_url = parse_pr_url(claude.result_text)
     prefix = f'**agent-{agent_id}**: '
@@ -1172,6 +1262,38 @@ def _post_spawn_coder(
         )
         return pr_url, True
 
+    if branch_state is not None and branch_state.pre_spawn_origin_sha is not None:
+        post_spawn_origin_sha = origin_branch_sha(
+            branch_state.worktree_path, branch_state.branch
+        )
+        if post_spawn_origin_sha == branch_state.pre_spawn_origin_sha:
+            # CODER reported PR success but `origin/<branch>` never advanced
+            # — without this guard the reviewer would re-read the same
+            # commit, fail with "no new commits", and bounce the issue back
+            # to Backlog for another no-op CODER pass. Escalate immediately
+            # to mirror the reviewer-side handling in AI-87.
+            label_lookup = _resolve_team_labels(linear, issue)
+            new_labels = _add_label(issue.label_ids, label_lookup, 'stuck')
+            body = (
+                f'{prefix}coder reported PR success but pushed no new '
+                f'commits — escalating to human.\n\n```\n'
+                f'{(claude.result_text or "")[:1500]}\n```'
+            )
+            linear.add_comment(issue.id, body)
+            target = states.get('Awaiting approval')
+            if target is None:
+                return pr_url, False
+            linear.update_issue(
+                issue.id,
+                IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
+            )
+            log.info(
+                '%s coder no-op (origin %s unchanged) -> Awaiting approval (stuck)',
+                issue.identifier,
+                branch_state.branch,
+            )
+            return pr_url, True
+
     linear.add_comment(issue.id, f'{prefix}PR: {pr_url}')
     target = states.get(role.target_state_on_success)
     if target is None:
@@ -1198,6 +1320,7 @@ def _post_spawn_reviewer(
     states: dict[str, str],
     agent_id: str,
     max_attempts_before_escalation: int = MAX_ATTEMPTS_BEFORE_ESCALATION,
+    branch_state: ReviewerBranchState | None = None,
 ) -> tuple[str | None, bool]:
     """Reviewer outcomes: APPROVE / REQUEST_CHANGES / blocked.
 
@@ -1208,20 +1331,31 @@ def _post_spawn_reviewer(
     Anything else (claude error, missing or BLOCKED verdict) is treated as
     a blocker — issue moves to Backlog with a diagnostic comment, and
     attempts are NOT incremented (we couldn't even verify the PR).
+
+    Empty-range escalation (was AI-87 regex on the model's wording) now
+    fires when `branch_state.pre_spawn_origin_sha` matches the SHA stamped
+    by our prior reviewer pass — see `latest_reviewed_sha_from_comments`.
     """
     prefix = f'**agent-{agent_id}**: '
     summary = claude.result_text or ''
     verdict = parse_verdict(summary)
     label_lookup = _resolve_team_labels(linear, issue)
+    sha_marker = ''
+    if branch_state is not None and branch_state.pre_spawn_origin_sha is not None:
+        sha_marker = f'\n\n<!--reviewed-sha:{branch_state.pre_spawn_origin_sha}-->'
 
     if claude.is_error or verdict is None:
-        if not claude.is_error and re.search(
-            r'no new commits since prior review', summary, re.IGNORECASE
+        if (
+            not claude.is_error
+            and branch_state is not None
+            and branch_state.pre_spawn_origin_sha is not None
+            and branch_state.pre_spawn_origin_sha == branch_state.last_reviewed_sha
         ):
             new_labels = _add_label(issue.label_ids, label_lookup, 'stuck')
             body = (
-                f'{prefix}reviewer reported no new commits since prior review — '
-                f'escalating to human.\n\n{summary[:2000]}'
+                f'{prefix}reviewer fired on the same SHA as the prior review '
+                f'(`{branch_state.pre_spawn_origin_sha}`) — escalating to '
+                f'human.\n\n{summary[:2000]}'
             )
             linear.add_comment(issue.id, body)
             target = states.get('Awaiting approval')
@@ -1232,8 +1366,9 @@ def _post_spawn_reviewer(
                 IssueUpdate(state_id=target, label_ids=new_labels, unset_assignee=True),
             )
             log.info(
-                '%s reviewer empty-range loop -> Awaiting approval (stuck)',
+                '%s reviewer empty-range loop (sha %s) -> Awaiting approval (stuck)',
                 issue.identifier,
+                branch_state.pre_spawn_origin_sha,
             )
             return None, True
 
@@ -1256,7 +1391,7 @@ def _post_spawn_reviewer(
         return None, True
 
     if verdict == 'APPROVE':
-        body = f'{prefix}REVIEW APPROVE\n\n{summary[:2000]}'
+        body = f'{prefix}REVIEW APPROVE\n\n{summary[:2000]}{sha_marker}'
         linear.add_comment(issue.id, body)
         new_labels = _add_label(issue.label_ids, label_lookup, 'kind:final-pr')
         target = states.get(role.target_state_on_success)
@@ -1278,7 +1413,7 @@ def _post_spawn_reviewer(
         new_labels = _add_label(new_labels, label_lookup, 'stuck')
         body = (
             f'{prefix}REVIEW REQUEST_CHANGES (attempts={next_attempts}) — '
-            f'escalating to human.\n\n{summary[:2000]}'
+            f'escalating to human.\n\n{summary[:2000]}{sha_marker}'
         )
         linear.add_comment(issue.id, body)
         target = states.get('Awaiting approval')
@@ -1298,7 +1433,7 @@ def _post_spawn_reviewer(
     new_labels = _set_attempts_label(issue.label_ids, label_lookup, next_attempts)
     body = (
         f'{prefix}REVIEW REQUEST_CHANGES (attempts={next_attempts}/'
-        f'{max_attempts_before_escalation}).\n\n{summary[:2000]}'
+        f'{max_attempts_before_escalation}).\n\n{summary[:2000]}{sha_marker}'
     )
     linear.add_comment(issue.id, body)
     target = states.get(role.target_state_on_blocker)

@@ -7,6 +7,7 @@ reaches Done or Cancelled.
 
 from __future__ import annotations
 
+import contextlib
 import shlex
 import subprocess
 import sys
@@ -214,6 +215,42 @@ def remove_worktree(
     if force:
         args.append('--force')
     _run_git(repo_path, args, timeout_seconds=timeout_seconds)
+
+
+def origin_branch_sha(
+    worktree: Path,
+    branch: str,
+    *,
+    fetch: bool = True,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> str | None:
+    """Return the SHA of `origin/<branch>` as seen from the worktree.
+
+    When `fetch=True` (default) the remote ref is refreshed first so the
+    returned SHA reflects the latest pushed state, not whatever the local
+    fetch tracker happened to last see. Returns None if the branch does
+    not exist on origin (e.g. before the first push) or if any git op
+    fails — callers treat unknown as "cannot prove advancement" and skip
+    the post-spawn no-op detection.
+    """
+    if fetch:
+        # Branch may legitimately not exist on origin yet — fall through so
+        # rev-parse can return None and the caller skips the check.
+        with contextlib.suppress(WorktreeError):
+            _run_git(
+                worktree,
+                ['fetch', 'origin', branch],
+                timeout_seconds=timeout_seconds,
+            )
+    try:
+        sha = _run_git(
+            worktree,
+            ['rev-parse', f'refs/remotes/origin/{branch}'],
+            timeout_seconds=timeout_seconds,
+        ).strip()
+    except WorktreeError:
+        return None
+    return sha or None
 
 
 def has_unpushed_commits(
