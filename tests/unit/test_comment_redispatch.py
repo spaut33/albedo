@@ -143,9 +143,7 @@ def _comment(
     author: str = 'human-1',
     created_at: str = '',
 ) -> Comment:
-    return Comment(
-        id=comment_id, body=body, author_id=author, created_at=created_at
-    )
+    return Comment(id=comment_id, body=body, author_id=author, created_at=created_at)
 
 
 def test_no_issues_no_op(tmp_path: Path) -> None:
