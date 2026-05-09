@@ -51,12 +51,27 @@ def test_sparkline_downsamples_when_input_longer_than_width() -> None:
     assert text.plain == widgets.SPARK_BASELINE + widgets.SPARK_BLOCKS[-1]
 
 
-def test_sparkline_zero_peak_is_all_blanks() -> None:
-    # All-zero input still collapses to spaces — the baseline glyph only
-    # shows up against a non-zero peak so there's something to be a
-    # baseline of.
+def test_sparkline_zero_peak_renders_baseline() -> None:
+    # All-zero input renders the dim baseline glyph for every sample so
+    # the trace reads as a continuous X-axis rather than collapsing into
+    # blanks. Only the left-pad (width - len(samples)) stays as spaces.
     text = widgets.sparkline([0, 0, 0], width=4)
-    assert text.plain == '    '
+    assert text.plain == ' ' + widgets.SPARK_BASELINE * 3
+
+
+def test_sparkline_all_zero_full_width_has_no_spaces() -> None:
+    # When width matches the sample count there is no left-pad, so the
+    # output must be entirely baseline glyphs with no literal spaces.
+    text = widgets.sparkline([0, 0, 0, 0], width=4)
+    assert text.plain == widgets.SPARK_BASELINE * 4
+    assert ' ' not in text.plain
+
+
+def test_sparkline_single_zero_sample_renders_baseline() -> None:
+    # Negative path: a one-element all-zero input must render exactly one
+    # baseline glyph and not a single space.
+    text = widgets.sparkline([0], width=1)
+    assert text.plain == widgets.SPARK_BASELINE
 
 
 def test_sparkline_left_pad_uses_literal_spaces_for_short_input() -> None:
