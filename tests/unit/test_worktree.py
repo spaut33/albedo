@@ -477,3 +477,127 @@ def test_ensure_worktree_releases_lock_on_error(repo: Path, tmp_path: Path) -> N
     # (and a follow-up call returning normally proves release).
     info = ensure_worktree(repo, wt_root, 'sample', 'AI-401', 'main')
     assert info.path.exists()
+
+
+def test_remove_and_ensure_worktree_concurrent_threads_succeed(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Regression for AI-90: `remove_worktree` and `ensure_worktree` must not
+    race on the shared `.git/worktrees/<name>` metadata.
+
+    Pre-create one worktree, then concurrently remove it while a second
+    `ensure_worktree` creates a different one against the same repo. Both
+    operations have to complete cleanly and `list_worktrees` must reflect
+    only the surviving worktree.
+    """
+    wt_root = tmp_path / 'worktrees'
+    pre = ensure_worktree(repo, wt_root, 'sample', 'AI-500', 'main')
+    assert pre.path.exists()
+
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+
+    def do_remove() -> None:
+        barrier.wait()
+        try:
+            remove_worktree(repo, pre.path)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def do_ensure() -> None:
+        barrier.wait()
+        try:
+            ensure_worktree(repo, wt_root, 'sample', 'AI-501', 'main', fetch=False)
+        except BaseException as exc:
+            errors.append(exc)
+
+    t_remove = threading.Thread(target=do_remove)
+    t_ensure = threading.Thread(target=do_ensure)
+    t_remove.start()
+    t_ensure.start()
+    t_remove.join(timeout=30)
+    t_ensure.join(timeout=30)
+
+    assert not t_remove.is_alive()
+    assert not t_ensure.is_alive()
+    assert errors == []
+    assert not pre.path.exists()
+    survivor = worktree_path(wt_root, 'sample', 'AI-501')
+    assert survivor.exists()
+
+    listed = list_worktrees(repo)
+    branches = {w.branch for w in listed}
+    assert branches == {'task/ai-501'}
+
+
+def test_remove_worktree_serializes_critical_section(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`remove_worktree` and `ensure_worktree` must hold the lock mutually.
+
+    Probe `_repo_lock` to count concurrent entries across both code paths
+    and confirm the count never exceeds one.
+    """
+    from albedo import worktree as wt_mod
+
+    # Pre-create worktrees so `remove_worktree` has something to do per call.
+    wt_root = tmp_path / 'worktrees'
+    pre_issues = [f'AI-{600 + i}' for i in range(3)]
+    pre_paths = [
+        ensure_worktree(repo, wt_root, 'sample', issue, 'main', fetch=False).path
+        for issue in pre_issues
+    ]
+
+    state_lock = threading.Lock()
+    counters = {'inside': 0, 'max_inside': 0}
+    real_repo_lock = wt_mod._repo_lock  # pyright: ignore[reportPrivateUsage]
+
+    @contextlib.contextmanager
+    def probing_repo_lock(repo_path: Path) -> Generator[None, None, None]:
+        with real_repo_lock(repo_path):
+            with state_lock:
+                counters['inside'] += 1
+                counters['max_inside'] = max(counters['max_inside'], counters['inside'])
+            try:
+                time.sleep(0.05)
+                yield
+            finally:
+                with state_lock:
+                    counters['inside'] -= 1
+
+    monkeypatch.setattr(wt_mod, '_repo_lock', probing_repo_lock)
+
+    new_issues = [f'AI-{700 + i}' for i in range(3)]
+
+    def remove_call(path: Path) -> None:
+        remove_worktree(repo, path)
+
+    def ensure_call(issue: str) -> None:
+        ensure_worktree(repo, wt_root, 'sample', issue, 'main', fetch=False)
+
+    with ThreadPoolExecutor(max_workers=len(pre_paths) + len(new_issues)) as pool:
+        futures = [pool.submit(remove_call, p) for p in pre_paths]
+        futures += [pool.submit(ensure_call, issue) for issue in new_issues]
+        for f in futures:
+            f.result()
+
+    assert counters['max_inside'] == 1, (
+        f'expected serialization, saw {counters["max_inside"]} concurrent entries'
+    )
+
+
+def test_remove_worktree_releases_lock_on_error(repo: Path, tmp_path: Path) -> None:
+    """A `WorktreeError` from `_run_git` inside `remove_worktree` must not leak
+    the lock — a follow-up `ensure_worktree` call has to acquire it without
+    deadlocking. We force the failure by pointing at a path that exists but is
+    not a registered worktree, which `git worktree remove` rejects.
+    """
+    wt_root = tmp_path / 'worktrees'
+    bogus = tmp_path / 'not-a-worktree'
+    bogus.mkdir()
+    with pytest.raises(WorktreeError):
+        remove_worktree(repo, bogus)
+    # If the lock leaked, this second call would deadlock under the per-test
+    # timeout; reaching it normally proves the lock was released on error.
+    info = ensure_worktree(repo, wt_root, 'sample', 'AI-800', 'main')
+    assert info.path.exists()

@@ -233,13 +233,20 @@ def remove_worktree(
     force: bool = False,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> None:
-    """Remove a worktree. No-op if the path no longer exists."""
+    """Remove a worktree. No-op if the path no longer exists.
+
+    `git worktree remove` mutates the same `.git/worktrees/<name>` metadata
+    that `ensure_worktree`'s `worktree add` writes, so it has to take the
+    same per-repo lock to avoid racing a concurrent `ensure_worktree` on
+    another worker thread targeting the same shared repo.
+    """
     if not worktree.exists():
         return
     args = ['worktree', 'remove', str(worktree)]
     if force:
         args.append('--force')
-    _run_git(repo_path, args, timeout_seconds=timeout_seconds)
+    with _repo_lock(repo_path):
+        _run_git(repo_path, args, timeout_seconds=timeout_seconds)
 
 
 def origin_branch_sha(
