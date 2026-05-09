@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from albedo.heartbeat import heartbeat_path, touch_heartbeat
 from albedo.housekeeping import recover_stale_claims
@@ -211,6 +212,14 @@ def test_recover_falls_back_to_assignee_only_without_manifest(tmp_path: Path) ->
 
 from albedo.housekeeping import release_decomposed_children  # noqa: E402
 
+_PARENT_STATE_TYPES: dict[str, str] = {
+    'state-todo': 'unstarted',
+    'state-done': 'completed',
+    'state-backlog': 'unstarted',
+    'state-triage': 'triage',
+    'state-canceled': 'canceled',
+}
+
 
 class _WatcherFakeLinear:
     def __init__(
@@ -226,8 +235,14 @@ class _WatcherFakeLinear:
         self.updates: list[tuple[str, IssueUpdate]] = []
         self.comments: list[tuple[str, str]] = []
 
-    def query(self, document: str, _variables: object) -> dict[str, object]:
+    def query(self, document: str, variables: dict[str, Any]) -> dict[str, object]:
         if 'DecompositionParents' in document:
+            wanted_type: str = variables['filter']['state']['type']['eq']
+            matching = [
+                p
+                for p in self.parents
+                if _PARENT_STATE_TYPES.get(p.state_id, 'unstarted') == wanted_type
+            ]
             return {
                 'issues': {
                     'nodes': [
@@ -256,7 +271,7 @@ class _WatcherFakeLinear:
                                 ]
                             },
                         }
-                        for p in self.parents
+                        for p in matching
                     ]
                 }
             }
@@ -295,14 +310,19 @@ class _WatcherFakeLinear:
         return 'c1'
 
 
-def _parent(*, label_ids: tuple[str, ...] = ()) -> Issue:
+def _parent(
+    *,
+    label_ids: tuple[str, ...] = (),
+    state_name: str = 'Todo',
+    state_id: str = 'state-todo',
+) -> Issue:
     return Issue(
         id='uuid-parent',
         identifier='AI-50',
         title='Feature X',
         description='',
-        state_id='state-done',
-        state_name='Done',
+        state_id=state_id,
+        state_name=state_name,
         assignee_id=None,
         label_ids=label_ids,
         label_names=(),
@@ -335,6 +355,7 @@ def _child(
 _DEFAULT_STATES = {
     'Triage': 'state-triage',
     'Backlog': 'state-backlog',
+    'Todo': 'state-todo',
     'Done': 'state-done',
     'Canceled': 'state-canceled',
 }
@@ -421,6 +442,30 @@ def test_release_decomposed_children_cancels_human_marked_child() -> None:
     body = fake.comments[0][1]
     assert 'released AI-51' in body
     assert 'cancelled AI-52' in body
+
+
+def test_release_decomposed_children_ignores_parent_in_completed_state() -> None:
+    parents = [
+        _parent(
+            label_ids=('lab-kind-decomp',),
+            state_name='Done',
+            state_id='state-done',
+        )
+    ]
+    children = {'uuid-parent': [_child(suffix='51')]}
+    fake = _WatcherFakeLinear(
+        parents=parents,
+        children_by_parent=children,
+        team_states=_DEFAULT_STATES,
+    )
+
+    report = release_decomposed_children(linear=fake, team_id='t1')  # type: ignore[arg-type]
+
+    assert report.parents_processed == 0
+    assert report.children_released == []
+    assert report.children_cancelled == []
+    assert fake.updates == []
+    assert fake.comments == []
 
 
 # --- Phase 6: PR merge → Done watcher ---------------------------------------
@@ -804,7 +849,6 @@ def test_gc_worktrees_skips_non_task_branches(tmp_path: Path) -> None:
 
 # --- Phase 7: archive job tests --------------------------------------------
 
-from typing import Any  # noqa: E402
 
 from albedo.housekeeping import archive_old_done_issues  # noqa: E402
 
