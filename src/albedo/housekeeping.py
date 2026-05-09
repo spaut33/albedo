@@ -3,7 +3,7 @@
 Currently ships:
 - startup-time stale-claim recovery (Phase 3),
 - decomposition approval watcher (Phase 5, Variant A): when a parent issue
-  with the `kind:decomposition` label transitions to Done, move all of its
+  with the `kind:decomposition` label transitions to Todo, move all of its
   children from Triage to Backlog so workers can pick them up,
 - merged-PR watcher (Phase 6): when a Linear issue's PR has been merged on
   GitHub, automatically move the issue to Done.
@@ -191,9 +191,13 @@ def release_decomposed_children(
 
     Variant A flow: ARCHITECT creates children in `Triage` state with a
     non-null parent. Workers skip such issues (Triage + parent_id is not
-    None). On parent approval (parent moves to Done with the
+    None). On parent approval (parent moves to Todo with the
     `kind:decomposition` label), this watcher moves each child to
-    `Backlog`, where the regular Coder pickup applies.
+    `Backlog`, where the regular Coder pickup applies. The parent stays
+    visibly in-progress (state type `unstarted`) while children execute
+    rather than being marked Done before any work begins; worker pickup
+    states (`Triage`, `Backlog`, `Review`) exclude `Todo`, so the parent
+    is not re-picked.
 
     Triage children carrying the `cancelled-by-human` label are dropped
     instead of released — moved to `Canceled` so they don't linger in
@@ -204,7 +208,7 @@ def release_decomposed_children(
     Idempotent: children already past Triage are skipped, so re-running
     the watcher is a no-op.
     """
-    parents = _list_decomposition_parents_done(linear, team_id, project_id)
+    parents = _list_decomposition_parents_approved(linear, team_id, project_id)
     released: list[Issue] = []
     cancelled: list[Issue] = []
     backlog_state_id = _find_state_id(linear, team_id, 'Backlog')
@@ -274,7 +278,7 @@ def release_decomposed_children(
     )
 
 
-def _list_decomposition_parents_done(
+def _list_decomposition_parents_approved(
     linear: LinearClient,
     team_id: str,
     project_id: str | None = None,
@@ -286,7 +290,7 @@ def _list_decomposition_parents_done(
     filt: dict[str, Any] = {
         'team': {'id': {'eq': team_id}},
         'labels': {'name': {'eq': 'kind:decomposition'}},
-        'state': {'type': {'eq': 'completed'}},
+        'state': {'type': {'eq': 'unstarted'}},
     }
     if project_id is not None:
         filt['project'] = {'id': {'eq': project_id}}
