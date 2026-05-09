@@ -137,8 +137,15 @@ class _FakeLinear:
         }
 
 
-def _comment(comment_id: str, body: str, author: str = 'human-1') -> Comment:
-    return Comment(id=comment_id, body=body, author_id=author)
+def _comment(
+    comment_id: str,
+    body: str,
+    author: str = 'human-1',
+    created_at: str = '',
+) -> Comment:
+    return Comment(
+        id=comment_id, body=body, author_id=author, created_at=created_at
+    )
 
 
 def test_no_issues_no_op(tmp_path: Path) -> None:
@@ -153,7 +160,11 @@ def test_no_issues_no_op(tmp_path: Path) -> None:
     assert report.inspected == 0
 
 
-def test_first_observation_seeds_without_firing(tmp_path: Path) -> None:
+def test_first_observation_seeds_without_firing_when_no_bot_anchor(
+    tmp_path: Path,
+) -> None:
+    """No bot comment to compare against → conservative seed-without-fire,
+    preserving the original rollout protection on Awaiting approval."""
     issue = _issue(label_names=('kind:final-pr',), label_ids=('lab-final',))
     fake = _FakeLinear(
         issues=[issue],
@@ -169,6 +180,88 @@ def test_first_observation_seeds_without_firing(tmp_path: Path) -> None:
     assert 'AI-5' in report.seeded
     assert fake.updates == []
     assert (tmp_path / LAST_COMMENT_STATE_FILE).exists()
+
+
+def test_first_observation_fires_when_user_replies_after_bot_output(
+    tmp_path: Path,
+) -> None:
+    """Architect just posted DECOMPOSITION on a freshly-gated issue and
+    the user immediately replied. `prior_id is None` because the issue
+    had never been inspected before — but the reply is genuinely new,
+    not rollout-era backlog. Must fire on first observation."""
+    issue = _issue(
+        label_names=('kind:decomposition',),
+        label_ids=('lab-decomp',),
+    )
+    fake = _FakeLinear(
+        issues=[issue],
+        comments={
+            'uuid-1': [
+                _comment(
+                    'c1',
+                    '**agent-3**: DECOMPOSITION (2 children): ...',
+                    author='bot-1',
+                    created_at='2026-05-09T10:23:33Z',
+                ),
+                _comment(
+                    'c2',
+                    "Let's use Ctrl+K not just K",
+                    author='human-1',
+                    created_at='2026-05-09T10:30:33Z',
+                ),
+            ]
+        },
+    )
+    report = redispatch_on_new_user_comments(
+        linear=fake,  # type: ignore[arg-type]
+        team_id='t1',
+        bot_user_ids=frozenset({'bot-1'}),
+        state_dir=tmp_path,
+    )
+    assert len(report.fired) == 1
+    assert report.fired[0].to_state == 'Triage'
+    assert report.fired[0].trigger_label == 'kind:decomposition'
+    assert report.seeded == ()
+
+
+def test_first_observation_seeds_when_bot_output_is_latest(
+    tmp_path: Path,
+) -> None:
+    """Rollout-era backlog: old user comments precede the bot's gating
+    output. The latest activity is the bot's, so the user feedback is
+    historical — seed without firing to avoid destructive replays."""
+    issue = _issue(
+        label_names=('kind:decomposition',),
+        label_ids=('lab-decomp',),
+    )
+    fake = _FakeLinear(
+        issues=[issue],
+        comments={
+            'uuid-1': [
+                _comment(
+                    'c1',
+                    'old user thoughts from before rollout',
+                    author='human-1',
+                    created_at='2026-04-01T10:00:00Z',
+                ),
+                _comment(
+                    'c2',
+                    '**agent-3**: DECOMPOSITION: ...',
+                    author='bot-1',
+                    created_at='2026-05-09T10:23:33Z',
+                ),
+            ]
+        },
+    )
+    report = redispatch_on_new_user_comments(
+        linear=fake,  # type: ignore[arg-type]
+        team_id='t1',
+        bot_user_ids=frozenset({'bot-1'}),
+        state_dir=tmp_path,
+    )
+    assert report.fired == ()
+    assert 'AI-5' in report.seeded
+    assert fake.updates == []
 
 
 def test_new_comment_after_seed_redispatches_final_pr_to_review(
