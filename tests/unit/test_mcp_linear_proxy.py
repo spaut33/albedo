@@ -11,10 +11,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from albedo.linear_client import Comment, Issue, LinearClient
+from albedo.linear_client import Comment, Issue, LinearClient, LinearError
 from albedo.mcp_audit import audit_log_path
 from albedo.mcp_linear_proxy import (
     OUTCOME_BAD_ARGS,
+    OUTCOME_ERROR,
     OUTCOME_OK,
     OUTCOME_SCOPE_DENIED,
     PROTOCOL_VERSION,
@@ -180,6 +181,44 @@ def test_list_comments_returns_serialized_dataclass(tmp_path: Path) -> None:
             'created_at': '2026-01-01',
         }
     ]
+    audit = _read_audit_lines(state_dir)
+    assert len(audit) == 1
+    assert audit[0]['outcome'] == OUTCOME_OK
+    assert audit[0]['tool'] == 'linear_list_comments'
+
+
+def test_linear_error_audited_as_outcome_error(tmp_path: Path) -> None:
+    state_dir = tmp_path / STATE_DIR_NAME
+    client = MagicMock(spec=LinearClient)
+    client.get_issue.side_effect = LinearError('boom')
+    handler = LinearProxyHandler(client, _make_context(state_dir))
+
+    result = handler.call_tool('linear_get_issue', {'issue_id': ISSUE_IDENTIFIER})
+
+    assert result['isError'] is True
+    structured = json.loads(result['content'][0]['text'])
+    assert 'boom' in structured['error']
+    audit = _read_audit_lines(state_dir)
+    assert len(audit) == 1
+    assert audit[0]['outcome'] == OUTCOME_ERROR
+    assert audit[0]['tool'] == 'linear_get_issue'
+
+
+def test_missing_body_audited_as_bad_args(tmp_path: Path) -> None:
+    state_dir = tmp_path / STATE_DIR_NAME
+    client = MagicMock(spec=LinearClient)
+    handler = LinearProxyHandler(client, _make_context(state_dir))
+
+    result = handler.call_tool(
+        'linear_add_comment',
+        {'issue_id': ISSUE_IDENTIFIER, 'body': '   '},
+    )
+
+    assert result['isError'] is True
+    client.add_comment.assert_not_called()
+    audit = _read_audit_lines(state_dir)
+    assert len(audit) == 1
+    assert audit[0]['outcome'] == OUTCOME_BAD_ARGS
 
 
 def test_unknown_tool_returns_error_and_audits_bad_args(tmp_path: Path) -> None:
