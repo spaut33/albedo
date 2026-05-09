@@ -314,7 +314,7 @@ def _phase_cell(phase: str, *, animated: bool) -> RenderableType:
     return Text(label, style=color)
 
 
-def _action_cell(view: WorkerView, *, animated: bool) -> RenderableType:
+def _action_cell(view: WorkerView) -> RenderableType:
     status = view.status
     if status is None or status.issue is None:
         return Text('—', style='dim')
@@ -324,12 +324,6 @@ def _action_cell(view: WorkerView, *, animated: bool) -> RenderableType:
         label = (
             f'{stream.last_tool_name}: {target}' if target else stream.last_tool_name
         )
-        running = status.phase in ACTIVE_CLAUDE_PHASES
-        if animated and running:
-            return Text.assemble(
-                (_spinner_glyph() + ' ', 'green'),
-                (label, 'white'),
-            )
         return Text(label, style='white')
     return Text('—', style='dim')
 
@@ -471,7 +465,7 @@ def render_workers(
                 )
             )
         if show_action:
-            row.append(_action_cell(view, animated=animated))
+            row.append(_action_cell(view))
         row.append(Text(_format_elapsed(elapsed), style='dim'))
         if view.is_stale:
             # Tint the whole row red-on-default by overriding cell styles.
