@@ -138,6 +138,11 @@ def _release_with_state_restore(
                     IssueUpdate(state_id=manifest.prev_state_id, unset_assignee=True),
                 )
                 clear_claim_manifest(manifest_path)
+                log.info(
+                    '%s: claim released (stale claim, state restored to %s)',
+                    issue.identifier,
+                    manifest.prev_state_name,
+                )
                 return
             except Exception as exc:
                 log.warning(
@@ -146,7 +151,7 @@ def _release_with_state_restore(
                     issue.identifier,
                     exc,
                 )
-    release_claim_assignee(linear=linear, issue=issue)
+    release_claim_assignee(linear=linear, issue=issue, reason='stale claim recovery')
 
 
 _AGENT_BRANCH = re.compile(r'/agent-(?P<id>[^/]+)/')
