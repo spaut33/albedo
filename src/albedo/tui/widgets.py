@@ -324,7 +324,7 @@ def _action_cell(view: WorkerView) -> RenderableType:
         label = (
             f'{stream.last_tool_name}: {target}' if target else stream.last_tool_name
         )
-        return Text(label, style='white')
+        return Text(_truncate(label, ACTION_COLUMN_WIDTH), style='white')
     return Text('—', style='dim')
 
 
@@ -405,6 +405,9 @@ WORKER_NAME_WIDTH = 12
 ACT_COLUMN_WIDTH = 12
 
 
+ACTION_COLUMN_WIDTH = 40
+
+
 def render_workers(
     snapshot: AggregatedSnapshot,
     *,
@@ -425,7 +428,7 @@ def render_workers(
     if show_activity:
         table.add_column('act', no_wrap=True, width=ACT_COLUMN_WIDTH)
     if show_action:
-        table.add_column('action', ratio=1)
+        table.add_column('action', no_wrap=True, width=ACTION_COLUMN_WIDTH, ratio=1)
     table.add_column('elapsed', no_wrap=True, width=7, justify='right')
 
     workers = snapshot.workers

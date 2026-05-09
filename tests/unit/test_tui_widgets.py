@@ -172,6 +172,23 @@ def test_workers_panel_overflow_indicator() -> None:
     assert 'more' in text
 
 
+def test_workers_panel_action_cell_truncates_long_target_to_single_line() -> None:
+    long_target = 'a/' * 200
+    view = _make_worker('1', last_tool=('Edit', long_target))
+    snap = _make_snapshot([view])
+    text = _capture(widgets.render_workers(snap, animated=False), width=120)
+    # Locate the row containing the worker and verify it occupies a single
+    # visual line — i.e. the action segment never wraps onto a second line.
+    row_lines = [line for line in text.splitlines() if 'CODER' in line]
+    assert len(row_lines) == 1, text
+    row = row_lines[0]
+    # The truncated action label must end with the ellipsis produced by
+    # `_truncate` (followed only by trailing column padding/whitespace).
+    assert '…' in row, row
+    # The full untruncated path must not appear in the rendered row.
+    assert long_target not in row
+
+
 def test_events_panel_renders_recent_messages() -> None:
     events = [
         LogEvent(ts=time.time(), agent='1', level='info', message='claimed LIN-1'),
