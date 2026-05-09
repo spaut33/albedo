@@ -7,7 +7,9 @@ from pathlib import Path
 
 from albedo.status_writer import StatusWriter, status_path
 from albedo.tui.snapshot import (
+    SUPERVISOR_AGENT_TOKEN,
     LogTailer,
+    _id_sort_key,  # pyright: ignore[reportPrivateUsage]
     aggregate,
     discover_agent_ids,
     load_linear_queue,
@@ -16,7 +18,10 @@ from albedo.tui.snapshot import (
 
 def _seed_log(log_dir: Path, agent_id: str, lines: list[dict[str, object]]) -> Path:
     log_dir.mkdir(parents=True, exist_ok=True)
-    path = log_dir / f'agent-{agent_id}.log'
+    if agent_id == SUPERVISOR_AGENT_TOKEN:
+        path = log_dir / 'supervisor.log'
+    else:
+        path = log_dir / f'agent-{agent_id}.log'
     with path.open('a', encoding='utf-8') as f:
         for line in lines:
             f.write(json.dumps(line) + '\n')
@@ -46,6 +51,52 @@ def test_log_tailer_handles_rotation(tmp_path: Path) -> None:
     _seed_log(log_dir, '1', [{'event': 'after-rotation', 'agent': '1'}])
     fresh = tailer.poll()
     assert any(ev.message == 'after-rotation' for ev in fresh)
+
+
+def test_log_tailer_surfaces_supervisor_log_lines(tmp_path: Path) -> None:
+    log_dir = tmp_path / 'logs'
+    _seed_log(log_dir, SUPERVISOR_AGENT_TOKEN, [{'event': 'pre-init', 'level': 'info'}])
+    tailer = LogTailer(log_dir)
+    assert tailer.poll() == []
+    _seed_log(
+        log_dir,
+        SUPERVISOR_AGENT_TOKEN,
+        [{'event': 'housekeeping ran', 'level': 'info'}],
+    )
+    new = tailer.poll()
+    assert len(new) == 1
+    assert new[0].message == 'housekeeping ran'
+    assert new[0].agent == SUPERVISOR_AGENT_TOKEN
+
+
+def test_log_tailer_handles_supervisor_log_rotation(tmp_path: Path) -> None:
+    log_dir = tmp_path / 'logs'
+    _seed_log(log_dir, SUPERVISOR_AGENT_TOKEN, [{'event': 'before-rotate'}])
+    tailer = LogTailer(log_dir)
+    tailer.poll()  # noop, EOF seeded
+    target = log_dir / 'supervisor.log'
+    target.unlink()
+    _seed_log(log_dir, SUPERVISOR_AGENT_TOKEN, [{'event': 'after-rotation'}])
+    fresh = tailer.poll()
+    assert any(
+        ev.message == 'after-rotation' and ev.agent == SUPERVISOR_AGENT_TOKEN
+        for ev in fresh
+    )
+
+
+def test_log_tailer_does_not_raise_when_supervisor_log_absent(tmp_path: Path) -> None:
+    log_dir = tmp_path / 'logs'
+    _seed_log(log_dir, '1', [{'event': 'agent-only', 'agent': '1'}])
+    tailer = LogTailer(log_dir)
+    # supervisor.log never existed — poll should not raise.
+    assert tailer.poll() == []
+
+
+def test_id_sort_key_handles_non_numeric_supervisor_token() -> None:
+    # The sort key must tolerate the 'sv' pseudo-id without raising; numeric
+    # ids should still come first in any sorted output.
+    ids = sorted(['2', SUPERVISOR_AGENT_TOKEN, '1', '10'], key=_id_sort_key)
+    assert ids == ['1', '2', '10', SUPERVISOR_AGENT_TOKEN]
 
 
 def test_log_tailer_handles_in_place_truncation(tmp_path: Path) -> None:
