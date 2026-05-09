@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-DEFAULT_STALE_AFTER_SECONDS = 5 * 60
+DEFAULT_STALE_AFTER_SECONDS = 30 * 60
 
 
 def heartbeat_path(state_dir: Path, agent_id: str) -> Path:
