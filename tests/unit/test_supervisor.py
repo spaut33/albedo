@@ -28,6 +28,7 @@ from albedo.linear_client import Team
 from albedo.supervisor import (
     SupervisorOptions,
     _housekeeping_loop,  # pyright: ignore[reportPrivateUsage]
+    _make_terminate_worker,  # pyright: ignore[reportPrivateUsage]
     supervise,
 )
 
@@ -297,6 +298,62 @@ def test_second_signal_escalates_to_sigkill_on_live_children(
     for child in live_children:
         assert child.terminate_calls == 1
         assert child.kill_calls >= 1
+
+
+def _make_fake_children(names: list[str]) -> list[_FakeProcess]:
+    procs: list[_FakeProcess] = []
+    for name in names:
+        proc = _FakeProcess(target=_dummy_entry, args=(), name=name, daemon=True)
+        proc.start()
+        procs.append(proc)
+    return procs
+
+
+def test_terminate_worker_only_kills_named_child() -> None:
+    children = _make_fake_children(['agent-1', 'agent-2', 'agent-3'])
+    terminate = _make_terminate_worker(children)  # type: ignore[arg-type]
+
+    assert terminate('2') is True
+
+    by_name = {c.name: c for c in children}
+    assert by_name['agent-1'].terminate_calls == 0
+    assert by_name['agent-2'].terminate_calls == 1
+    assert by_name['agent-3'].terminate_calls == 0
+    assert by_name['agent-1'].is_alive()
+    assert not by_name['agent-2'].is_alive()
+    assert by_name['agent-3'].is_alive()
+
+
+def test_terminate_worker_unknown_id_is_noop() -> None:
+    children = _make_fake_children(['agent-1', 'agent-2'])
+    terminate = _make_terminate_worker(children)  # type: ignore[arg-type]
+
+    assert terminate('99') is False
+    for proc in children:
+        assert proc.terminate_calls == 0
+
+
+def test_terminate_worker_already_exited_returns_false() -> None:
+    children = _make_fake_children(['agent-1', 'agent-2'])
+    children[0].join()  # simulate worker that already exited
+    assert not children[0].is_alive()
+
+    terminate = _make_terminate_worker(children)  # type: ignore[arg-type]
+
+    assert terminate('1') is False
+    assert children[0].terminate_calls == 0
+
+
+def test_terminate_worker_swallows_terminate_exception() -> None:
+    children = _make_fake_children(['agent-1'])
+
+    def boom() -> None:
+        raise OSError('process gone')
+
+    children[0].terminate = boom  # type: ignore[method-assign]
+    terminate = _make_terminate_worker(children)  # type: ignore[arg-type]
+
+    assert terminate('1') is False
 
 
 class _FakeLinearClient:

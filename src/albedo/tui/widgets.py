@@ -879,7 +879,14 @@ def render_footer(*, focused_agent: str | None) -> RenderableType:
         ('agent  ', 'dim'),
     ]
     if focused_agent is not None:
-        bits.extend([('[Esc]', 'bold'), ('back  ', 'dim')])
+        bits.extend(
+            [
+                ('[Esc]', 'bold'),
+                ('back  ', 'dim'),
+                ('[Ctrl+K]', 'bold'),
+                (' kill  ', 'dim'),
+            ]
+        )
     bits.extend(
         [
             ('[/]', 'bold'),

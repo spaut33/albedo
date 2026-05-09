@@ -178,6 +178,41 @@ def supervise(
     housekeeping_thread.join(timeout=5)
 
 
+def _make_terminate_worker(
+    children: Sequence[BaseProcess],
+) -> Callable[[str], bool]:
+    """Build the per-worker terminate callable handed to the TUI.
+
+    Scans `children` for a process whose `.name` matches `agent-<id>` and
+    sends SIGTERM via `.terminate()`. Returns True when a live match was
+    signalled, False otherwise (no match, already exited, or terminate
+    raised). Logs every outcome at INFO/WARNING so operators can see the
+    Ctrl+K request even when the TUI is in alt-screen mode.
+    """
+
+    def terminate_worker(agent_id: str) -> bool:
+        target_name = f'agent-{agent_id}'
+        for child in children:
+            if child.name != target_name:
+                continue
+            if not child.is_alive():
+                log.info('terminate_worker: %s already exited', target_name)
+                return False
+            try:
+                child.terminate()
+            except Exception as exc:
+                log.warning(
+                    'terminate_worker: failed to terminate %s: %s', target_name, exc
+                )
+                return False
+            log.info('terminate_worker: sent SIGTERM to %s', target_name)
+            return True
+        log.info('terminate_worker: no child named %s', target_name)
+        return False
+
+    return terminate_worker
+
+
 def _run_with_tui(
     options: SupervisorOptions,
     children: list[BaseProcess],
@@ -227,6 +262,8 @@ def _run_with_tui(
         # workers may take a second or two to exit afterwards.
         return housekeeping_stop.is_set() and not all_exited()
 
+    terminate_worker = _make_terminate_worker(children)
+
     ctx = TuiContext(
         state_dir=options.config.state_dir,
         project_name=options.project_label or 'albedo',
@@ -238,6 +275,7 @@ def _run_with_tui(
         daily_cost_provider=lambda: daily_cost_usd(stats_ctx),
         warnings_provider=warnings_provider,
         shutdown_in_progress=shutdown_in_progress,
+        terminate_worker=terminate_worker,
         should_stop=all_exited,
         token_cap=options.config.usage.rolling_window_token_cap,
         ledger=ledger,

@@ -24,6 +24,7 @@ KEY_ESCAPE = '\x1b'
 KEY_BACKSPACE = '\x7f'
 KEY_ENTER = '\r'
 KEY_CTRL_C = '\x03'
+KEY_CTRL_K = '\x0b'
 
 
 class KeyReader(AbstractContextManager['KeyReader']):

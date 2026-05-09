@@ -9,18 +9,20 @@ we cover:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from albedo.tui.app import TuiApp, TuiContext
-from albedo.tui.input import KEY_ESCAPE, split_chunk
+from albedo.tui.input import KEY_CTRL_K, KEY_ESCAPE, split_chunk
 
 
-def _app() -> TuiApp:
+def _app(terminate_worker: Callable[[str], bool] | None = None) -> TuiApp:
     ctx = TuiContext(
         state_dir=Path('/tmp'),
         project_name='sample',
         expected_workers=3,
         log_dir=Path('/tmp'),
+        terminate_worker=terminate_worker,
     )
     return TuiApp(ctx)
 
@@ -99,6 +101,60 @@ def test_w_toggles_warnings() -> None:
     assert app.state().show_warnings is True
     app.handle_keys(['w'])
     assert app.state().show_warnings is False
+
+
+def test_ctrl_k_with_focused_agent_invokes_callback() -> None:
+    calls: list[str] = []
+
+    def fake_terminate(agent_id: str) -> bool:
+        calls.append(agent_id)
+        return True
+
+    app = _app(terminate_worker=fake_terminate)
+    app.handle_keys(['2', KEY_CTRL_K])
+    assert calls == ['2']
+
+
+def test_ctrl_k_without_focus_is_noop() -> None:
+    calls: list[str] = []
+
+    def fake_terminate(agent_id: str) -> bool:
+        calls.append(agent_id)
+        return True
+
+    app = _app(terminate_worker=fake_terminate)
+    app.handle_keys([KEY_CTRL_K])
+    assert calls == []
+    assert app.state().focused_agent is None
+
+
+def test_ctrl_k_without_terminate_callback_is_silent() -> None:
+    """If TuiContext is built without terminate_worker, Ctrl+K must not raise."""
+    app = _app(terminate_worker=None)
+    app.handle_keys(['1', KEY_CTRL_K])
+    assert app.state().focused_agent == '1'
+
+
+def test_bare_k_does_not_kill() -> None:
+    calls: list[str] = []
+
+    def fake_terminate(agent_id: str) -> bool:
+        calls.append(agent_id)
+        return True
+
+    app = _app(terminate_worker=fake_terminate)
+    app.handle_keys(['1', 'k', 'K'])
+    assert calls == []
+
+
+def test_ctrl_k_swallows_callback_exception() -> None:
+    def boom(_agent_id: str) -> bool:
+        raise RuntimeError('child gone')
+
+    app = _app(terminate_worker=boom)
+    app.handle_keys(['2', KEY_CTRL_K])
+    # Reaching here means the exception was logged, not propagated.
+    assert app.state().focused_agent == '2'
 
 
 def test_ctrl_c_byte_is_ignored_at_app_level() -> None:
