@@ -56,6 +56,7 @@ class _FakeProcess:
         self.exitcode: int | None = None
         self._alive = False
         self.terminate_calls = 0
+        self.kill_calls = 0
 
     def start(self) -> None:
         self._alive = True
@@ -68,6 +69,11 @@ class _FakeProcess:
         self.terminate_calls += 1
         self._alive = False
         self.exitcode = -15
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self._alive = False
+        self.exitcode = -9
 
     def join(self, timeout: float | None = None) -> None:
         del timeout
@@ -231,6 +237,66 @@ def test_supervise_installs_signal_handlers_that_terminate_children(
     # After workers are joined they're not "alive" anymore; firing the handler
     # should be safe (no-op for dead children).
     handlers[sup.signal.SIGTERM](sup.signal.SIGTERM, None)
+    # And firing a second time (escalation path) must also be a no-op for
+    # already-exited children — kill() must NOT be called on a dead child.
+    handlers[sup.signal.SIGTERM](sup.signal.SIGTERM, None)
+    for proc in _FakeProcess.started:
+        assert proc.kill_calls == 0
+
+
+def test_second_signal_escalates_to_sigkill_on_live_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second SIGINT delivery must escalate to child.kill() on still-alive workers."""
+
+    handlers: dict[int, Callable[..., object]] = {}
+
+    def fake_signal(num: int, handler: Callable[..., object]) -> object:
+        handlers[num] = handler
+        return None
+
+    monkeypatch.setattr(sup.signal, 'signal', fake_signal)
+
+    live_children: list[_FakeProcess] = []
+    for i in range(2):
+        proc = _FakeProcess(
+            target=_dummy_entry,
+            args=(),
+            name=f'agent-{i + 1}',
+            daemon=True,
+        )
+        proc.start()
+        # Decouple liveness from terminate(): a stuck worker keeps reporting
+        # itself alive even after SIGTERM, which is exactly the scenario the
+        # escalation handles.
+        proc._alive = True  # pyright: ignore[reportPrivateUsage]
+
+        def _stay_alive(self: _FakeProcess = proc) -> None:
+            self.terminate_calls += 1
+
+        proc.terminate = _stay_alive  # type: ignore[method-assign]
+        live_children.append(proc)
+
+    housekeeping_stop = threading.Event()
+    sup._install_forwarding_handlers(  # pyright: ignore[reportPrivateUsage]
+        list(live_children),  # type: ignore[arg-type]
+        housekeeping_stop,
+    )
+
+    assert sup.signal.SIGINT in handlers
+    sigint_handler = handlers[sup.signal.SIGINT]
+
+    sigint_handler(sup.signal.SIGINT, None)
+    assert housekeeping_stop.is_set()
+    for child in live_children:
+        assert child.terminate_calls == 1
+        assert child.kill_calls == 0
+        assert child.is_alive()  # the stuck worker is still around
+
+    sigint_handler(sup.signal.SIGINT, None)
+    for child in live_children:
+        assert child.terminate_calls == 1
+        assert child.kill_calls >= 1
 
 
 class _FakeLinearClient:

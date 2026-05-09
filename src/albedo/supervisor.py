@@ -333,19 +333,38 @@ def _install_forwarding_handlers(
     children: list[BaseProcess],
     housekeeping_stop: threading.Event,
 ) -> None:
+    invocations = 0
+
     def forward(signum: int, _frame: FrameType | None) -> None:
-        log.info(
-            'supervisor received signal %s; forwarding to %d worker(s)',
+        nonlocal invocations
+        invocations += 1
+        if invocations == 1:
+            log.info(
+                'supervisor received signal %s; forwarding SIGTERM to '
+                '%d worker(s) (press again to force-quit)',
+                signum,
+                len(children),
+            )
+            housekeeping_stop.set()
+            for child in children:
+                if child.is_alive():
+                    try:
+                        child.terminate()
+                    except Exception as exc:
+                        log.warning('failed to signal %s: %s', child.name, exc)
+            return
+
+        log.warning(
+            'supervisor received signal %s again; escalating to SIGKILL on '
+            'still-alive worker(s)',
             signum,
-            len(children),
         )
-        housekeeping_stop.set()
         for child in children:
             if child.is_alive():
                 try:
-                    child.terminate()
+                    child.kill()
                 except Exception as exc:
-                    log.warning('failed to signal %s: %s', child.name, exc)
+                    log.warning('failed to kill %s: %s', child.name, exc)
 
     signal.signal(signal.SIGTERM, forward)
     signal.signal(signal.SIGINT, forward)
