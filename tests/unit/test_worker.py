@@ -7,6 +7,7 @@ import multiprocessing as mp
 import shutil
 import subprocess
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -723,6 +724,101 @@ def test_run_once_blocks_when_no_pr_url(
     # gate the issue so the worker pool stops re-picking it.
     label_ids = getattr(update, 'label_ids', ()) or ()
     assert 'lab-await-human' in label_ids
+
+
+def test_run_once_silent_coder_failure_bumps_attempts_and_stays_in_backlog(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CODER hits max_turns with no BLOCKED marker → bump attempts, bounce to
+    Backlog. Stays re-pickable so transient failures self-heal — escalation
+    only kicks in once the threshold is reached.
+    """
+
+    def fake_spawn(prompt: str, **_kwargs: object) -> ClaudeRunResult:
+        del prompt
+        return ClaudeRunResult(
+            is_error=True,
+            exit_code=1,
+            result_text='',
+            total_cost_usd=0.0,
+            usage={},
+            terminal_reason='max_turns',
+        )
+
+    monkeypatch.setattr(worker_mod, 'spawn_claude', fake_spawn)
+    cfg = _build_cfg(repo, tmp_path)
+    issue = replace(_issue(), label_ids=(), label_names=())
+    fake = _FakeLinear(issue)
+
+    result = run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        fetch=False,
+    )
+
+    assert result.pr_url is None
+    assert result.linear_updated is True
+    body = fake.comments[0][1]
+    assert 'BLOCKED' in body
+    assert 'max_turns' in body
+    _, update = fake.updates[0]
+    assert getattr(update, 'state_id', None) == 'state-backlog'
+    label_ids = getattr(update, 'label_ids', ()) or ()
+    assert 'lab-att-1' in label_ids
+    assert 'lab-stuck' not in label_ids
+    assert 'lab-await-human' not in label_ids
+
+
+def test_run_once_silent_coder_failure_escalates_at_threshold(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After MAX_ATTEMPTS_BEFORE_ESCALATION (3) silent failures we stop the
+    re-pickup loop: add `stuck`, transition to Awaiting approval. Without
+    this the worker pool burns a full CODER run ($3-ish) per round forever.
+    """
+
+    def fake_spawn(prompt: str, **_kwargs: object) -> ClaudeRunResult:
+        del prompt
+        return ClaudeRunResult(
+            is_error=True,
+            exit_code=1,
+            result_text='',
+            total_cost_usd=0.0,
+            usage={},
+            terminal_reason='max_turns',
+        )
+
+    monkeypatch.setattr(worker_mod, 'spawn_claude', fake_spawn)
+    cfg = _build_cfg(repo, tmp_path)
+    issue = replace(
+        _issue(),
+        label_ids=('lab-att-2',),
+        label_names=('attempts:2',),
+    )
+    fake = _FakeLinear(issue)
+
+    run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        fetch=False,
+    )
+
+    escalation_comment = fake.comments[-1][1]
+    assert 'failed 3 runs' in escalation_comment
+    assert 'escalating' in escalation_comment
+    _, update = fake.updates[-1]
+    assert getattr(update, 'state_id', None) == 'state-await'
+    label_ids = getattr(update, 'label_ids', ()) or ()
+    assert 'lab-stuck' in label_ids
+    assert 'lab-att-3' in label_ids
 
 
 def test_run_once_coder_no_op_push_escalates_to_human(

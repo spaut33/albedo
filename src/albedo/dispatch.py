@@ -38,7 +38,7 @@ CODER = RoleSpec(
     target_state_on_success='Review',
     target_state_on_blocker='Backlog',
     timeout_minutes=30,
-    max_turns=50,
+    max_turns=100,
 )
 
 REVIEWER = RoleSpec(
@@ -56,7 +56,7 @@ REVIEWER = RoleSpec(
     target_state_on_success='Awaiting approval',
     target_state_on_blocker='Backlog',
     timeout_minutes=20,
-    max_turns=30,
+    max_turns=50,
 )
 
 ARCHITECT = RoleSpec(
@@ -75,7 +75,7 @@ ARCHITECT = RoleSpec(
     target_state_on_success='Awaiting approval',
     target_state_on_blocker='Triage',
     timeout_minutes=15,
-    max_turns=25,
+    max_turns=40,
     permission_mode='plan',
 )
 
