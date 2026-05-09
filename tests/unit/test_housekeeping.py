@@ -468,6 +468,100 @@ def test_release_decomposed_children_ignores_parent_in_completed_state() -> None
     assert fake.comments == []
 
 
+# --- AI-101: decomposition parent rollup to Done ---------------------------
+
+from albedo.housekeeping import (  # noqa: E402
+    complete_decompositions_when_children_done,
+)
+
+
+def test_rollup_closes_parent_when_all_children_finished() -> None:
+    parents = [_parent(label_ids=('lab-kind-decomp',))]
+    children = {
+        'uuid-parent': [
+            _child(suffix='51', state_name='Done'),
+            _child(suffix='52', state_name='Canceled'),
+            _child(suffix='53', state_name='Duplicate'),
+        ]
+    }
+    fake = _WatcherFakeLinear(
+        parents=parents,
+        children_by_parent=children,
+        team_states=_DEFAULT_STATES,
+    )
+
+    report = complete_decompositions_when_children_done(linear=fake, team_id='t1')  # type: ignore[arg-type]
+
+    assert [p.identifier for p in report.parents_completed] == ['AI-50']
+    assert fake.updates == [('uuid-parent', IssueUpdate(state_id='state-done'))]
+    assert len(fake.comments) == 1
+    parent_id, body = fake.comments[0]
+    assert parent_id == 'uuid-parent'
+    assert 'All decomposition children finished' in body
+
+
+def test_rollup_leaves_parent_when_a_child_still_unfinished() -> None:
+    parents = [_parent(label_ids=('lab-kind-decomp',))]
+    children = {
+        'uuid-parent': [
+            _child(suffix='51', state_name='Done'),
+            _child(suffix='52', state_name='Backlog'),
+        ]
+    }
+    fake = _WatcherFakeLinear(
+        parents=parents,
+        children_by_parent=children,
+        team_states=_DEFAULT_STATES,
+    )
+
+    report = complete_decompositions_when_children_done(linear=fake, team_id='t1')  # type: ignore[arg-type]
+
+    assert report.parents_completed == []
+    assert fake.updates == []
+    assert fake.comments == []
+
+
+def test_rollup_skips_parent_with_zero_children() -> None:
+    parents = [_parent(label_ids=('lab-kind-decomp',))]
+    fake = _WatcherFakeLinear(
+        parents=parents,
+        children_by_parent={'uuid-parent': []},
+        team_states=_DEFAULT_STATES,
+    )
+
+    report = complete_decompositions_when_children_done(linear=fake, team_id='t1')  # type: ignore[arg-type]
+
+    assert report.parents_completed == []
+    assert fake.updates == []
+    assert fake.comments == []
+
+
+def test_rollup_idempotent_when_parent_already_done() -> None:
+    parents = [
+        _parent(
+            label_ids=('lab-kind-decomp',),
+            state_name='Done',
+            state_id='state-done',
+        )
+    ]
+    children = {
+        'uuid-parent': [_child(suffix='51', state_name='Done')],
+    }
+    fake = _WatcherFakeLinear(
+        parents=parents,
+        children_by_parent=children,
+        team_states=_DEFAULT_STATES,
+    )
+
+    report = complete_decompositions_when_children_done(linear=fake, team_id='t1')  # type: ignore[arg-type]
+
+    # Parent is in `completed` state type, so the candidate query
+    # filtering on type='unstarted' excludes it — no update issued.
+    assert report.parents_completed == []
+    assert fake.updates == []
+    assert fake.comments == []
+
+
 # --- Phase 6: PR merge → Done watcher ---------------------------------------
 
 

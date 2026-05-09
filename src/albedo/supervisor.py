@@ -33,6 +33,7 @@ from albedo.dispatch_messages import DispatchQueue, ResultQueue
 from albedo.github_client import GithubClient
 from albedo.housekeeping import (
     archive_old_done_issues,
+    complete_decompositions_when_children_done,
     gc_worktrees,
     recover_stale_claims,
     release_decomposed_children,
@@ -444,6 +445,23 @@ def _housekeeping_loop(
                         )
                 except Exception as exc:
                     log.warning('housekeeping decomposition tick failed: %s', exc)
+
+                try:
+                    rollup_report = complete_decompositions_when_children_done(
+                        linear=client,
+                        team_id=team.id,
+                        project_id=options.config.linear.project_id,
+                    )
+                    if rollup_report.parents_completed:
+                        log.info(
+                            'housekeeping: closed %d decomposition parent(s) '
+                            'with all children finished',
+                            len(rollup_report.parents_completed),
+                        )
+                except Exception as exc:
+                    log.warning(
+                        'housekeeping decomposition rollup tick failed: %s', exc
+                    )
 
                 if github is not None:
                     try:

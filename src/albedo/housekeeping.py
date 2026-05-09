@@ -278,6 +278,58 @@ def release_decomposed_children(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DecompositionRollupReport:
+    parents_completed: list[Issue]
+
+
+def complete_decompositions_when_children_done(
+    *,
+    linear: LinearClient,
+    team_id: str,
+    project_id: str | None = None,
+) -> DecompositionRollupReport:
+    """Move a decomposition parent to Done once all of its children are finished.
+
+    After approval (AI-100), the parent sits in Todo while children execute.
+    This watcher rolls the parent up to Done when every child has reached a
+    terminal state (Done / Canceled / Cancelled / Duplicate). Without this,
+    parents accumulate in Todo until a human closes them manually.
+
+    Defensive: a parent with zero children is left untouched. Idempotent: a
+    parent already in a completed state is not in the candidate set, so
+    rerunning the rollup is a no-op.
+    """
+    parents = _list_decomposition_parents_approved(linear, team_id, project_id)
+    done_state_id = _find_state_id(linear, team_id, 'Done')
+    if done_state_id is None:
+        log.warning(
+            'housekeeping: no Done state found in team %s; skipping rollup',
+            team_id,
+        )
+        return DecompositionRollupReport(parents_completed=[])
+
+    completed: list[Issue] = []
+    for parent in parents:
+        children = linear.list_children(parent.id)
+        if not children:
+            continue
+        if not all(child.state_name in _FINISHED_STATE_NAMES for child in children):
+            continue
+        linear.update_issue(parent.id, IssueUpdate(state_id=done_state_id))
+        linear.add_comment(
+            parent.id,
+            '**housekeeping**: All decomposition children finished — closing parent.',
+        )
+        completed.append(parent)
+        log.info(
+            'decomposition rollup: %s closed (all %d children finished)',
+            parent.identifier,
+            len(children),
+        )
+    return DecompositionRollupReport(parents_completed=completed)
+
+
 def _list_decomposition_parents_approved(
     linear: LinearClient,
     team_id: str,
