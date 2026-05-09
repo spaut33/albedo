@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import sys
 import time
@@ -52,8 +51,6 @@ JSONRPC_INVALID_REQUEST = -32600
 JSONRPC_METHOD_NOT_FOUND = -32601
 JSONRPC_INVALID_PARAMS = -32602
 JSONRPC_INTERNAL_ERROR = -32603
-
-log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +647,15 @@ def handle_tool_call(
     args: dict[str, Any] = cast('dict[str, Any]', raw_args)
     spec = _TOOLS_BY_NAME.get(tool_name)
     if spec is None:
+        record_audit(
+            state_dir=config.state_dir,
+            issue_id=config.issue_id,
+            agent_id=config.agent_id,
+            tool=f'github.{tool_name}',
+            args_summary=summarize_args(args),
+            outcome='refused',
+            latency_ms=0,
+        )
         return _make_error(
             request_id,
             JSONRPC_METHOD_NOT_FOUND,
@@ -743,6 +749,9 @@ def _make_client(
         base_url=base_url,
         transport=transport,
         timeout=DEFAULT_TIMEOUT_SECONDS,
+        # GitHub's job-logs endpoint replies 302 → S3; without
+        # follow_redirects the proxy would surface an empty body as ok.
+        follow_redirects=True,
         headers={
             'Accept': 'application/vnd.github+json',
             'Authorization': f'Bearer {pat}',
