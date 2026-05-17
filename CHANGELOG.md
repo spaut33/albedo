@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### CLI
+
+- `albedo help` and `albedo help <subcommand>` are now valid entry
+  points that mirror `albedo --help` and `albedo <subcommand> --help`,
+  so usage is discoverable without remembering the `--help` flag.
+
 ### Setup-flow simplification
 
 `albedo run`, `albedo preflight`, and `albedo setup` now auto-seed
