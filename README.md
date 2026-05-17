@@ -146,6 +146,10 @@ explicit subcommands for re-seeding (with `--force`), debugging, or
 running the bootstrap independently — none of them are required for a
 fresh setup.
 
+Run `albedo help` (or `albedo help <subcommand>`) to print usage
+without remembering flags — mirrors `albedo --help` and
+`albedo <subcommand> --help`.
+
 ### Single-shot debugging
 
 ```bash
