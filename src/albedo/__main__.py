@@ -27,6 +27,8 @@ from albedo.config import (
     resolve_runtime_config,
 )
 from albedo.init_cmd import (
+    _build_init_parser,  # pyright: ignore[reportPrivateUsage]
+    _build_init_repo_parser,  # pyright: ignore[reportPrivateUsage]
     init_main,
     init_repo_main,
     seed_global_home,
@@ -41,12 +43,15 @@ from albedo.repo_config import (
     RepoManifestNotFoundError,
     load_repo_manifest,
 )
+from albedo.setup import (
+    _build_parser as _build_setup_parser,  # pyright: ignore[reportPrivateUsage]
+)
 from albedo.setup import bootstrap as setup_bootstrap
 from albedo.setup import main as setup_main
 from albedo.supervisor import SupervisorOptions, supervise
 from albedo.worker import RunOnceResult, run_once
 
-_SUBCOMMANDS = frozenset({'run', 'setup', 'preflight', 'init', 'init-repo'})
+_SUBCOMMANDS = frozenset({'run', 'setup', 'preflight', 'init', 'init-repo', 'help'})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,7 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
             '  setup      Bootstrap Linear team states + labels '
             '(idempotent); verifies the discovered repo`s Linear project.\n'
             '  run        (default; flag-driven) Spawn workers and start '
-            'the poll loop.\n\n'
+            'the poll loop.\n'
+            '  help       Print help for albedo or a specific subcommand.\n\n'
             'Paths:\n'
             '  $ALBEDO_HOME              Global config + secrets + prompts '
             '(default: ~/.config/albedo).\n'
@@ -279,6 +285,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return init_main(remainder)
         if subcommand == 'init-repo':
             return init_repo_main(remainder)
+        if subcommand == 'help':
+            return _run_help_subcommand(remainder)
         # 'run' falls through to the flag-driven path.
         raw = remainder
 
@@ -379,7 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _run_preflight_subcommand(argv: Sequence[str]) -> int:
+def _build_preflight_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='albedo preflight',
         description='Validate the local environment before launching workers.',
@@ -397,7 +405,11 @@ def _run_preflight_subcommand(argv: Sequence[str]) -> int:
             "(default: $ALBEDO_HOME/mcp-servers.json; pass '' to disable)."
         ),
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def _run_preflight_subcommand(argv: Sequence[str]) -> int:
+    args = _build_preflight_parser().parse_args(argv)
     if not _ensure_global_config_seeded(args.config):
         return 2
     if not _ensure_repo_manifest_seeded(Path.cwd()):
@@ -405,6 +417,59 @@ def _run_preflight_subcommand(argv: Sequence[str]) -> int:
     config_path = Path(args.config).expanduser() if args.config else None
     mcp_config_path = _resolve_mcp_config_arg(args.mcp_config)
     return run_preflight(config_path=config_path, mcp_config_path=mcp_config_path)
+
+
+def _help_parser_for(name: str) -> argparse.ArgumentParser:
+    """Return the parser whose `print_help()` describes subcommand `name`.
+
+    Builds a fresh top-level parser annotated with a `help` note when
+    the operator asks for `albedo help help`.
+    """
+    if name == 'run':
+        return build_parser()
+    if name == 'preflight':
+        return _build_preflight_parser()
+    if name == 'setup':
+        return _build_setup_parser()
+    if name == 'init':
+        return _build_init_parser()
+    if name == 'init-repo':
+        return _build_init_repo_parser()
+    if name == 'help':
+        parser = build_parser()
+        parser.description = (
+            'albedo help [<subcommand>] — print help for albedo or a '
+            'specific subcommand. With no argument, prints the top-level '
+            'help (same as --help). ' + (parser.description or '')
+        )
+        return parser
+    raise KeyError(name)
+
+
+_HELP_VALID_NAMES: tuple[str, ...] = (
+    'run',
+    'setup',
+    'preflight',
+    'init',
+    'init-repo',
+    'help',
+)
+
+
+def _run_help_subcommand(argv: Sequence[str]) -> int:
+    if not argv:
+        build_parser().print_help()
+        return 0
+    name = argv[0]
+    if name not in _HELP_VALID_NAMES:
+        valid = ', '.join(_HELP_VALID_NAMES)
+        print(
+            f"error: unknown subcommand '{name}' (valid: {valid})",
+            file=sys.stderr,
+        )
+        return 2
+    _help_parser_for(name).print_help()
+    return 0
 
 
 def _resolve_prompts_dir_arg(value: str | None) -> Path:
