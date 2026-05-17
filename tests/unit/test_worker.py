@@ -28,13 +28,16 @@ from albedo.dispatch_messages import (
     DispatchQueue,
     ResultQueue,
 )
+from albedo.github_client import PullRequestReview, PullRequestReviewComment
 from albedo.linear_client import Comment, IncomingRelation, Issue, IssueUpdate
 from albedo.worker import (
     acceptance_criteria_from_description,
     attempts_from_labels,
     build_mcp_extra_env,
     filter_dispatchable,
+    format_reviewer_findings_block,
     parse_pr_url,
+    pick_latest_verdict_review,
     run_once,
 )
 from tests._prompts_dir import bundled_prompts_dir
@@ -483,6 +486,131 @@ def test_filter_dispatchable_passes_through_when_clean() -> None:
     assert filter_dispatchable(issues) == issues
 
 
+def _review(
+    *,
+    review_id: int = 1,
+    body: str = 'ok\n\nVERDICT: APPROVE',
+    submitted_at: str = '2026-05-17T16:00:00Z',
+    user_login: str = 'reviewer-bot',
+) -> PullRequestReview:
+    return PullRequestReview(
+        id=review_id,
+        user_login=user_login,
+        state='COMMENTED',
+        body=body,
+        submitted_at=submitted_at,
+        commit_id=f'sha-{review_id}',
+    )
+
+
+def _review_comment(
+    *,
+    comment_id: int,
+    path: str,
+    line: int | None,
+    body: str,
+    review_id: int | None,
+) -> PullRequestReviewComment:
+    return PullRequestReviewComment(
+        id=comment_id,
+        user_login='reviewer-bot',
+        path=path,
+        line=line,
+        body=body,
+        commit_id=f'sha-{comment_id}',
+        pull_request_review_id=review_id,
+    )
+
+
+def test_pick_latest_verdict_review_picks_newest_by_submitted_at() -> None:
+    old = _review(review_id=1, submitted_at='2026-05-17T16:00:00Z')
+    new = _review(
+        review_id=2,
+        submitted_at='2026-05-17T18:00:00Z',
+        body='fix it\n\nVERDICT: REQUEST_CHANGES',
+    )
+    not_a_verdict = _review(
+        review_id=3, submitted_at='2026-05-17T19:00:00Z', body='drive-by ping'
+    )
+    pending = _review(review_id=4, submitted_at='', body='draft\n\nVERDICT: APPROVE')
+
+    chosen = pick_latest_verdict_review([old, new, not_a_verdict, pending])
+
+    assert chosen == new
+
+
+def test_pick_latest_verdict_review_filters_by_login_when_provided() -> None:
+    ours = _review(review_id=1, user_login='reviewer-bot')
+    theirs = _review(
+        review_id=2,
+        user_login='human-1',
+        submitted_at='2026-05-17T20:00:00Z',
+        body='nope\n\nVERDICT: REQUEST_CHANGES',
+    )
+
+    chosen = pick_latest_verdict_review(
+        [ours, theirs], reviewer_logins=frozenset({'reviewer-bot'})
+    )
+
+    assert chosen == ours
+
+
+def test_pick_latest_verdict_review_returns_none_when_no_verdict_marker() -> None:
+    bare = _review(review_id=1, body='lgtm')
+    assert pick_latest_verdict_review([bare]) is None
+    assert pick_latest_verdict_review([]) is None
+
+
+def test_format_reviewer_findings_block_renders_anchored_first_lines() -> None:
+    review = _review(review_id=42, body='verdict\n\nVERDICT: REQUEST_CHANGES')
+    comments = [
+        _review_comment(
+            comment_id=100,
+            path='src/x.py',
+            line=10,
+            body='rename foo to bar\nbecause...',
+            review_id=42,
+        ),
+        _review_comment(
+            comment_id=101,
+            path='src/y.py',
+            line=None,
+            body='no line — but still actionable',
+            review_id=42,
+        ),
+        _review_comment(
+            comment_id=999,
+            path='unrelated',
+            line=1,
+            body='from a different review',
+            review_id=7,
+        ),
+        _review_comment(
+            comment_id=102, path='src/z.py', line=5, body='   ', review_id=42
+        ),
+    ]
+
+    block = format_reviewer_findings_block(review, comments)
+
+    assert block == (
+        '- src/x.py:10 — rename foo to bar\n- src/y.py — no line — but still actionable'
+    )
+
+
+def test_format_reviewer_findings_block_empty_when_review_is_none() -> None:
+    assert format_reviewer_findings_block(None, []) == ''
+
+
+def test_format_reviewer_findings_block_empty_when_no_matching_comments() -> None:
+    review = _review(review_id=1)
+    foreign = [
+        _review_comment(
+            comment_id=10, path='a', line=1, body='from elsewhere', review_id=99
+        )
+    ]
+    assert format_reviewer_findings_block(review, foreign) == ''
+
+
 def test_parse_pr_url_finds_marker() -> None:
     assert parse_pr_url('PR: https://github.com/me/sample/pull/3') == (
         'https://github.com/me/sample/pull/3'
@@ -732,6 +860,190 @@ def test_run_once_coder_renders_latest_reviewer_feedback_block(
     assert 'fix the off-by-one in parser' in prompt_text
     # Picks the *newest* matching bot comment, not the older one.
     assert 'old note' not in prompt_text
+    # The hard-rule section must render whenever reviewer feedback is
+    # present — it tells the agent "no new commits + feedback = BLOCKED",
+    # which is what stops the empty-range -> `stuck` escalation when the
+    # agent would otherwise re-emit the PR URL and bail.
+    assert '## Hard rule when reviewer feedback is present' in prompt_text
+
+
+class _StubGithubClient:
+    """Stub `GithubClient` for worker tests that inject reviewer findings.
+
+    Records the methods called so tests can assert wire-up without
+    standing up a real HTTP transport. Implements only the two methods
+    the CODER pre-flight path needs.
+    """
+
+    def __init__(
+        self,
+        *,
+        reviews: list[PullRequestReview],
+        comments: list[PullRequestReviewComment],
+    ) -> None:
+        self._reviews = reviews
+        self._comments = comments
+        self.calls: list[tuple[str, str, str, int]] = []
+
+    def list_pull_request_reviews(
+        self, owner: str, repo: str, number: int
+    ) -> list[PullRequestReview]:
+        self.calls.append(('reviews', owner, repo, number))
+        return list(self._reviews)
+
+    def list_pull_request_review_comments(
+        self, owner: str, repo: str, number: int
+    ) -> list[PullRequestReviewComment]:
+        self.calls.append(('comments', owner, repo, number))
+        return list(self._comments)
+
+    def close(self) -> None:
+        return None
+
+    def __enter__(self) -> _StubGithubClient:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+def test_run_once_coder_injects_line_anchored_findings_block(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a PR already exists and the latest reviewer pass left
+    line-anchored sub-comments, the orchestrator must pre-fetch them and
+    render a `## Reviewer findings (line-anchored)` block in the CODER
+    prompt — so the agent doesn't have to (and potentially fail to) call
+    the GitHub MCP itself.
+    """
+    captured: list[Mapping[str, object]] = []
+    _stub_spawn(monkeypatch, captured=captured)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+    fake.linear_comments = [
+        Comment(
+            id='c-pr',
+            body='**agent-1**: PR: https://github.com/me/sample/pull/7',
+            author_id='bot',
+        ),
+        Comment(
+            id='c-verdict',
+            body=(
+                '**agent-1**: REVIEW REQUEST_CHANGES (attempts=1/3).\n\n'
+                'fix three things'
+            ),
+            author_id='bot',
+        ),
+    ]
+
+    stub = _StubGithubClient(
+        reviews=[
+            PullRequestReview(
+                id=11,
+                user_login='reviewer-bot',
+                state='COMMENTED',
+                body='findings below\n\nVERDICT: REQUEST_CHANGES',
+                submitted_at='2026-05-17T16:15:31Z',
+                commit_id='abc',
+            ),
+        ],
+        comments=[
+            PullRequestReviewComment(
+                id=100,
+                user_login='reviewer-bot',
+                path='src/albedo/__main__.py',
+                line=449,
+                body='Delete `_HELP_VALID_NAMES` entirely',
+                commit_id='abc',
+                pull_request_review_id=11,
+            ),
+            PullRequestReviewComment(
+                id=101,
+                user_login='reviewer-bot',
+                path='src/albedo/__main__.py',
+                line=423,
+                body='Remove the docstring from this private helper.',
+                commit_id='abc',
+                pull_request_review_id=11,
+            ),
+        ],
+    )
+
+    def _stub_factory(_pat: object) -> _StubGithubClient:
+        return stub
+
+    monkeypatch.setattr(worker_mod, 'GithubClient', _stub_factory)
+
+    run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        cli='claude',
+        fetch=False,
+        github_pat=cast('object', 'pat-stub'),  # type: ignore[arg-type]
+    )
+
+    prompt_text = cast('str', captured[0]['prompt'])
+    # Lead paragraph + bullets prove the block was rendered (the bare
+    # heading also appears in coder.md as a fallback reference, so it
+    # alone isn't a reliable marker).
+    assert 'The orchestrator pulled the line-anchored sub-comments' in prompt_text
+    assert '- src/albedo/__main__.py:449 — Delete `_HELP_VALID_NAMES` entirely' in (
+        prompt_text
+    )
+    assert (
+        '- src/albedo/__main__.py:423 — Remove the docstring from this private helper.'
+    ) in prompt_text
+    assert ('reviews', 'me', 'sample', 7) in stub.calls
+    assert ('comments', 'me', 'sample', 7) in stub.calls
+
+
+def test_run_once_coder_skips_findings_block_when_pr_missing(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First CODER pass on a fresh issue: no `PR:` marker in Linear
+    comments yet, so the orchestrator must skip the GitHub fetch entirely
+    and the prompt must omit the findings block.
+    """
+    captured: list[Mapping[str, object]] = []
+    _stub_spawn(monkeypatch, captured=captured)
+    cfg = _build_cfg(repo, tmp_path)
+    fake = _FakeLinear(_issue())
+    fake.linear_comments = []
+
+    called = {'n': 0}
+
+    class _ExplodingGithub:
+        def __init__(self, _pat: object) -> None:
+            called['n'] += 1
+
+    monkeypatch.setattr(worker_mod, 'GithubClient', _ExplodingGithub)
+
+    run_once(
+        config=cfg,
+        linear=fake,  # type: ignore[arg-type]
+        issue_identifier='AI-5',
+        agent_id='1',
+        prompts_dir=bundled_prompts_dir(),
+        mcp_config_path=None,
+        cli='claude',
+        fetch=False,
+        github_pat=cast('object', 'pat-stub'),  # type: ignore[arg-type]
+    )
+
+    prompt_text = cast('str', captured[0]['prompt'])
+    # The literal heading appears verbatim in coder.md as a fallback
+    # reference, so check the rendered section marker (which is followed
+    # by the canonical-list lead paragraph) is absent instead.
+    assert 'The orchestrator pulled the line-anchored sub-comments' not in prompt_text
+    assert called['n'] == 0
 
 
 def test_run_once_coder_omits_reviewer_feedback_block_when_none(
@@ -761,6 +1073,8 @@ def test_run_once_coder_omits_reviewer_feedback_block_when_none(
 
     prompt_text = cast('str', captured[0]['prompt'])
     assert '## Reviewer feedback' not in prompt_text
+    # No reviewer feedback ⇒ no hard-rule section either.
+    assert '## Hard rule when reviewer feedback is present' not in prompt_text
 
 
 def test_run_claimed_reviewer_prompt_omits_reviewer_feedback_block(

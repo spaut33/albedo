@@ -65,6 +65,7 @@ class PromptContext:
     user_comments_block: str = ''
     attachments_block: str = ''
     reviewer_feedback_block: str = ''
+    reviewer_findings_block: str = ''
 
 
 class PromptBuilder:
@@ -144,6 +145,7 @@ def _context_to_variables(context: PromptContext) -> dict[str, object]:
         'user_comments_block': context.user_comments_block,
         'attachments_block': context.attachments_block,
         'reviewer_feedback_block': context.reviewer_feedback_block,
+        'reviewer_findings_block': context.reviewer_findings_block,
     }
 
 

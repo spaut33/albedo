@@ -53,6 +53,14 @@ from albedo.dispatch_messages import (
     ResultQueue,
     TaskDone,
 )
+from albedo.github_client import (
+    GithubClient,
+    GithubError,
+    GithubNotFoundError,
+    PullRequestReview,
+    PullRequestReviewComment,
+)
+from albedo.github_client import parse_pr_url as parse_github_pr_url
 from albedo.heartbeat import heartbeat_path, touch_heartbeat
 from albedo.linear_client import Comment, Issue, IssueUpdate, LinearClient
 from albedo.paths import repo_prompts_dir
@@ -215,6 +223,131 @@ def latest_reviewed_sha_from_comments(comments: list[Comment]) -> str | None:
         if match is not None:
             return match.group(1)
     return None
+
+
+def pick_latest_verdict_review(
+    reviews: Sequence[PullRequestReview],
+    *,
+    reviewer_logins: frozenset[str] = frozenset(),
+) -> PullRequestReview | None:
+    """Return the most recent review whose body carries a `VERDICT:` marker.
+
+    `reviewer_logins` narrows the search to logins the orchestrator knows
+    belong to its own reviewer agent — when non-empty, reviews from other
+    authors are skipped. An empty set matches any author, which is what
+    the orchestrator falls back to when it couldn't enumerate bot logins
+    (e.g. PAT identity lookup failed at startup).
+
+    Sorting is by `submitted_at` lexicographically, which works because
+    GitHub formats it as an ISO-8601 string with a fixed `Z` timezone.
+    Reviews with an empty `submitted_at` (in-progress / pending) are
+    skipped — they have no stable ordering.
+    """
+    candidates: list[PullRequestReview] = []
+    for review in reviews:
+        if not review.submitted_at:
+            continue
+        if VERDICT_PATTERN.search(review.body or '') is None:
+            continue
+        if reviewer_logins and review.user_login not in reviewer_logins:
+            continue
+        candidates.append(review)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda r: r.submitted_at)
+
+
+def format_reviewer_findings_block(
+    review: PullRequestReview | None,
+    comments: Sequence[PullRequestReviewComment],
+) -> str:
+    """Render the line-anchored findings of a specific review as markdown.
+
+    Filters `comments` to those belonging to `review` (matched by
+    `pull_request_review_id`). Each rendered line looks like
+    `- path:line — first line of the comment body`. Returns an empty
+    string when `review` is None or no comments match — the caller uses
+    that to suppress the surrounding `## Reviewer findings` heading.
+    """
+    if review is None:
+        return ''
+    matching = [c for c in comments if c.pull_request_review_id == review.id]
+    if not matching:
+        return ''
+    rendered: list[str] = []
+    for comment in matching:
+        body = (comment.body or '').strip()
+        if not body:
+            continue
+        first_line = body.splitlines()[0].strip()
+        anchor = comment.path or '(unknown path)'
+        if comment.line is not None:
+            anchor = f'{anchor}:{comment.line}'
+        rendered.append(f'- {anchor} — {first_line}')
+    return '\n'.join(rendered)
+
+
+def fetch_reviewer_findings_block(
+    *,
+    github: GithubClient | None,
+    pr_url: str | None,
+    reviewer_logins: frozenset[str] = frozenset(),
+) -> str:
+    """Pull the latest verdict review's line-anchored findings and render them.
+
+    Returns an empty string and logs a warning on any failure — a transient
+    GitHub hiccup must never block the CODER spawn. The prompt template
+    suppresses the surrounding section when the block is empty, and the
+    coder.md fallback path (call the MCP itself) still applies.
+    """
+    if github is None or not pr_url:
+        return ''
+    parsed = parse_github_pr_url(pr_url)
+    if parsed is None:
+        return ''
+    owner, repo, number = parsed
+    try:
+        reviews = github.list_pull_request_reviews(owner, repo, number)
+    except GithubNotFoundError:
+        return ''
+    except GithubError as exc:
+        log.warning('list_pull_request_reviews(%s#%d) failed: %s', repo, number, exc)
+        return ''
+    latest = pick_latest_verdict_review(reviews, reviewer_logins=reviewer_logins)
+    if latest is None:
+        return ''
+    try:
+        comments = github.list_pull_request_review_comments(owner, repo, number)
+    except GithubNotFoundError:
+        return ''
+    except GithubError as exc:
+        log.warning(
+            'list_pull_request_review_comments(%s#%d) failed: %s', repo, number, exc
+        )
+        return ''
+    return format_reviewer_findings_block(latest, comments)
+
+
+def _coder_reviewer_findings_block(
+    *,
+    github_pat: SecretStr | None,
+    raw_comments: Sequence[Comment],
+) -> str:
+    """Resolve the latest reviewer-pass line-anchored findings for the CODER.
+
+    Locates the PR URL via `find_pr_url_in_comments`, opens a short-lived
+    `GithubClient`, and renders the block. Returns an empty string when
+    the PR isn't known yet (first CODER pass) or when no usable PAT was
+    passed in — the coder.md fallback path still calls the GitHub MCP
+    itself in those cases.
+    """
+    if github_pat is None:
+        return ''
+    pr_url = find_pr_url_in_comments(list(raw_comments))
+    if pr_url is None:
+        return ''
+    with GithubClient(github_pat) as github:
+        return fetch_reviewer_findings_block(github=github, pr_url=pr_url)
 
 
 def _build_attachments_block(
@@ -728,8 +861,13 @@ def run_claimed(
         reviewer_feedback_block = format_reviewer_feedback_block(
             latest_reviewer_feedback(raw_comments or [], bot_user_ids)
         )
+        reviewer_findings_block = _coder_reviewer_findings_block(
+            github_pat=github_pat,
+            raw_comments=raw_comments or [],
+        )
     else:
         reviewer_feedback_block = ''
+        reviewer_findings_block = ''
 
     attachments_block = _build_attachments_block(
         config=config,
@@ -764,6 +902,7 @@ def run_claimed(
         user_comments_block=user_comments_block,
         attachments_block=attachments_block,
         reviewer_feedback_block=reviewer_feedback_block,
+        reviewer_findings_block=reviewer_findings_block,
     )
     prompt = builder.build(role.prompt_template, context)
 
@@ -955,8 +1094,13 @@ def run_once(
         reviewer_feedback_block = format_reviewer_feedback_block(
             latest_reviewer_feedback(raw_comments, bot_user_ids)
         )
+        reviewer_findings_block = _coder_reviewer_findings_block(
+            github_pat=github_pat,
+            raw_comments=raw_comments,
+        )
     else:
         reviewer_feedback_block = ''
+        reviewer_findings_block = ''
 
     attachments_block = _build_attachments_block(
         config=config,
@@ -990,6 +1134,7 @@ def run_once(
         user_comments_block=user_comments_block,
         attachments_block=attachments_block,
         reviewer_feedback_block=reviewer_feedback_block,
+        reviewer_findings_block=reviewer_findings_block,
     )
     prompt = builder.build(role.prompt_template, context)
 

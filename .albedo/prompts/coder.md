@@ -104,20 +104,47 @@ escalate the issue to `stuck` — your run will not have helped.
 ## Implementation
 
 1. Build an internal plan (do not write it anywhere external).
-2. **Load relevant skills.** Before writing code, check the available
-   skills list and invoke any whose triggers match what you're about to
-   touch (language, framework, or domain of the change). Skip skills
-   that don't match — speculative loading just bloats context. If no
-   skill matches, proceed without one.
-3. Implement in logical commits using Conventional Commits style with the
+2. **Load relevant skills.** Before writing code, invoke via the Skill
+   tool any of the following whose triggers match what you're about to
+   touch. Skip the rest — speculative loading just bloats context.
+   - **`dignified-python`** — Python coding standards (LBYL exception
+     handling, modern type syntax `list[str] | None`, pathlib, ABC
+     interfaces, absolute imports, explicit error boundaries). Load
+     for **every** Python edit in this repo; it codifies the project's
+     baseline.
+   - **`simplify`** — review changed code for reuse, quality, and
+     efficiency, then fix what's found. Load **after** your first
+     pass implementation, before running the test suite, as a
+     self-review step.
+   - **`humanizer`** — strip AI tells from prose. Load when drafting
+     the PR body or any user-facing markdown; skip for code, comments,
+     and commit messages.
+
+   If none of the above match, proceed without a skill.
+
+3. **Verify library APIs with `context7` MCP.** Before calling into a
+   third-party library or framework whose exact API you're unsure of
+   (Jinja2, Anthropic SDK, Claude Agent SDK, Linear's GraphQL schema,
+   `click`, `pytest` plugins, etc.), consult `context7` — your training
+   data may be stale. Workflow:
+   - `mcp__context7__resolve-library-id` to map a human name to the
+     library's context7 ID.
+   - `mcp__context7__query-docs` to fetch the current docs for the
+     specific API you need (function signatures, configuration keys,
+     migration notes).
+
+   Skip context7 for stdlib calls, repo-internal symbols, and APIs you
+   just verified in the same session. Prefer it over `WebSearch` for
+   library reference questions.
+4. Implement in logical commits using Conventional Commits style with the
    issue identifier in scope: `feat({{ issue_id }}): ...`,
    `fix({{ issue_id }}): ...`.
-4. Add tests for new behavior — not just the happy path. Cover edge cases
+5. Add tests for new behavior — not just the happy path. Cover edge cases
    the AC implies.
-5. Run `make test`, `make lint`, `make typecheck` until green. Targets that
+6. Run `make test`, `make lint`, `make typecheck` until green. Targets that
    do not exist in the Makefile are skipped silently. Do NOT invent
    alternative commands.
-6. Scope discipline: drive-by improvements or unrelated bugs do NOT belong
+7. Scope discipline: drive-by improvements or unrelated bugs do NOT belong
    in this PR. Note them in your final response so the orchestrator can
    surface them later.
 
