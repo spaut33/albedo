@@ -69,6 +69,43 @@ class WorkflowJob:
     steps: tuple[WorkflowStep, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class PullRequestReview:
+    """A PR-level review summary (the `/pulls/{n}/reviews` shape).
+
+    `state` is GitHub's review event: typically `APPROVED`,
+    `CHANGES_REQUESTED`, `COMMENTED`, or `DISMISSED`. Albedo's reviewer
+    always posts with `state == 'COMMENTED'` and signals the verdict in
+    `body` via a `VERDICT: APPROVE|REQUEST_CHANGES` marker — see
+    `worker.VERDICT_PATTERN`.
+    """
+
+    id: int
+    user_login: str
+    state: str
+    body: str
+    submitted_at: str
+    commit_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class PullRequestReviewComment:
+    """A single line-anchored review comment (the `/pulls/{n}/comments` shape).
+
+    `line` is the GitHub side `line` field when present, falling back to
+    `original_line` so a comment anchored on a now-outdated diff line is
+    still rendered with its original position.
+    """
+
+    id: int
+    user_login: str
+    path: str
+    line: int | None
+    body: str
+    commit_id: str
+    pull_request_review_id: int | None
+
+
 def parse_pr_url(url: str) -> tuple[str, str, int] | None:
     """Extract `(owner, repo, number)` from a GitHub PR URL or None."""
     match = _PR_URL_PATTERN.match(url.strip())
@@ -167,6 +204,51 @@ class GithubClient:
         body = response.json()
         raw_prs = cast('list[dict[str, Any]]', body if isinstance(body, list) else [])
         return [_parse_pull_request(raw, owner, repo) for raw in raw_prs]
+
+    def list_pull_request_reviews(
+        self, owner: str, repo: str, number: int
+    ) -> list[PullRequestReview]:
+        """Return PR reviews (summary level), oldest-first per GitHub.
+
+        Raises `GithubNotFoundError` if the PR is missing, `GithubError`
+        on other failures. Empty list when the PR has no reviews yet.
+        """
+        path = f'/repos/{owner}/{repo}/pulls/{number}/reviews'
+        not_found = f'Reviews for {owner}/{repo}#{number} not found'
+        response = self._request(
+            'GET',
+            path,
+            params={'per_page': 100},
+            not_found_message=not_found,
+        )
+        body = response.json()
+        raw_reviews = cast(
+            'list[dict[str, Any]]', body if isinstance(body, list) else []
+        )
+        return [_parse_pull_request_review(raw) for raw in raw_reviews]
+
+    def list_pull_request_review_comments(
+        self, owner: str, repo: str, number: int
+    ) -> list[PullRequestReviewComment]:
+        """Return all line-anchored review comments on a PR, oldest-first.
+
+        Unlike `list_pull_request_reviews`, GitHub returns every
+        line-anchored comment across all reviews here; callers that need
+        a specific review's findings filter by `pull_request_review_id`.
+        """
+        path = f'/repos/{owner}/{repo}/pulls/{number}/comments'
+        not_found = f'Review comments for {owner}/{repo}#{number} not found'
+        response = self._request(
+            'GET',
+            path,
+            params={'per_page': 100},
+            not_found_message=not_found,
+        )
+        body = response.json()
+        raw_comments = cast(
+            'list[dict[str, Any]]', body if isinstance(body, list) else []
+        )
+        return [_parse_pull_request_review_comment(raw) for raw in raw_comments]
 
     def list_workflow_runs(
         self, owner: str, repo: str, head_branch: str
@@ -307,6 +389,39 @@ def _parse_workflow_job(raw: dict[str, Any]) -> WorkflowJob:
         name=str(raw.get('name', '')),
         conclusion=str(conclusion) if conclusion is not None else None,
         steps=steps,
+    )
+
+
+def _parse_pull_request_review(raw: dict[str, Any]) -> PullRequestReview:
+    user_obj = cast('dict[str, Any]', raw.get('user') or {})
+    return PullRequestReview(
+        id=int(raw.get('id', 0)),
+        user_login=str(user_obj.get('login') or ''),
+        state=str(raw.get('state') or ''),
+        body=str(raw.get('body') or ''),
+        submitted_at=str(raw.get('submitted_at') or ''),
+        commit_id=str(raw.get('commit_id') or ''),
+    )
+
+
+def _parse_pull_request_review_comment(
+    raw: dict[str, Any],
+) -> PullRequestReviewComment:
+    user_obj = cast('dict[str, Any]', raw.get('user') or {})
+    line_value = raw.get('line')
+    if line_value is None:
+        line_value = raw.get('original_line')
+    parsed_line = line_value if isinstance(line_value, int) else None
+    review_id_value = raw.get('pull_request_review_id')
+    review_id = int(review_id_value) if isinstance(review_id_value, int) else None
+    return PullRequestReviewComment(
+        id=int(raw.get('id', 0)),
+        user_login=str(user_obj.get('login') or ''),
+        path=str(raw.get('path') or ''),
+        line=parsed_line,
+        body=str(raw.get('body') or ''),
+        commit_id=str(raw.get('commit_id') or ''),
+        pull_request_review_id=review_id,
     )
 
 

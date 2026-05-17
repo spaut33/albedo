@@ -13,6 +13,8 @@ from albedo.github_client import (
     GithubError,
     GithubNotFoundError,
     PullRequest,
+    PullRequestReview,
+    PullRequestReviewComment,
     WorkflowJob,
     WorkflowRun,
     WorkflowStep,
@@ -359,3 +361,147 @@ def test_get_job_logs_raises_on_other_4xx() -> None:
         pytest.raises(GithubError, match='410'),
     ):
         client.get_job_logs('me', 'sample', 1)
+
+
+def test_list_pull_request_reviews_returns_typed_objects() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    'id': 11,
+                    'user': {'login': 'reviewer-bot'},
+                    'state': 'COMMENTED',
+                    'body': 'shipped\n\nVERDICT: APPROVE',
+                    'submitted_at': '2026-05-17T16:15:31Z',
+                    'commit_id': 'deadbeef',
+                },
+                {
+                    'id': 12,
+                    'user': None,
+                    'state': 'COMMENTED',
+                    'body': 'nope\n\nVERDICT: REQUEST_CHANGES',
+                    'submitted_at': '2026-05-17T17:00:00Z',
+                    'commit_id': 'cafebabe',
+                },
+            ],
+        )
+
+    with _make_client(handler) as client:
+        reviews = client.list_pull_request_reviews('me', 'sample', 42)
+
+    assert reviews == [
+        PullRequestReview(
+            id=11,
+            user_login='reviewer-bot',
+            state='COMMENTED',
+            body='shipped\n\nVERDICT: APPROVE',
+            submitted_at='2026-05-17T16:15:31Z',
+            commit_id='deadbeef',
+        ),
+        PullRequestReview(
+            id=12,
+            user_login='',
+            state='COMMENTED',
+            body='nope\n\nVERDICT: REQUEST_CHANGES',
+            submitted_at='2026-05-17T17:00:00Z',
+            commit_id='cafebabe',
+        ),
+    ]
+    assert captured[0].url.path == '/repos/me/sample/pulls/42/reviews'
+
+
+def test_list_pull_request_reviews_raises_typed_not_found_on_404() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text='no such pr')
+
+    with (
+        _make_client(handler) as client,
+        pytest.raises(GithubNotFoundError, match='not found'),
+    ):
+        client.list_pull_request_reviews('me', 'sample', 99)
+
+
+def test_list_pull_request_review_comments_falls_back_to_original_line() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    'id': 100,
+                    'user': {'login': 'reviewer-bot'},
+                    'path': 'src/x.py',
+                    'line': 42,
+                    'body': 'rename foo to bar',
+                    'commit_id': 'sha1',
+                    'pull_request_review_id': 11,
+                },
+                {
+                    'id': 101,
+                    'user': {'login': 'reviewer-bot'},
+                    'path': 'src/y.py',
+                    'line': None,
+                    'original_line': 7,
+                    'body': 'outdated diff anchor',
+                    'commit_id': 'sha2',
+                    'pull_request_review_id': 11,
+                },
+                {
+                    'id': 102,
+                    'user': {'login': 'reviewer-bot'},
+                    'path': 'src/z.py',
+                    'line': None,
+                    'original_line': None,
+                    'body': 'no line at all',
+                    'commit_id': 'sha3',
+                    'pull_request_review_id': None,
+                },
+            ],
+        )
+
+    with _make_client(handler) as client:
+        comments = client.list_pull_request_review_comments('me', 'sample', 42)
+
+    assert comments == [
+        PullRequestReviewComment(
+            id=100,
+            user_login='reviewer-bot',
+            path='src/x.py',
+            line=42,
+            body='rename foo to bar',
+            commit_id='sha1',
+            pull_request_review_id=11,
+        ),
+        PullRequestReviewComment(
+            id=101,
+            user_login='reviewer-bot',
+            path='src/y.py',
+            line=7,
+            body='outdated diff anchor',
+            commit_id='sha2',
+            pull_request_review_id=11,
+        ),
+        PullRequestReviewComment(
+            id=102,
+            user_login='reviewer-bot',
+            path='src/z.py',
+            line=None,
+            body='no line at all',
+            commit_id='sha3',
+            pull_request_review_id=None,
+        ),
+    ]
+
+
+def test_list_pull_request_review_comments_raises_typed_not_found_on_404() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text='no such pr')
+
+    with (
+        _make_client(handler) as client,
+        pytest.raises(GithubNotFoundError, match='not found'),
+    ):
+        client.list_pull_request_review_comments('me', 'sample', 99)
