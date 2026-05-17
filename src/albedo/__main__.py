@@ -420,11 +420,6 @@ def _run_preflight_subcommand(argv: Sequence[str]) -> int:
 
 
 def _help_parser_for(name: str) -> argparse.ArgumentParser:
-    """Return the parser whose `print_help()` describes subcommand `name`.
-
-    Builds a fresh top-level parser annotated with a `help` note when
-    the operator asks for `albedo help help`.
-    """
     if name == 'run':
         return build_parser()
     if name == 'preflight':
@@ -446,25 +441,15 @@ def _help_parser_for(name: str) -> argparse.ArgumentParser:
     raise KeyError(name)
 
 
-_HELP_VALID_NAMES: tuple[str, ...] = (
-    'run',
-    'setup',
-    'preflight',
-    'init',
-    'init-repo',
-    'help',
-)
-
-
 def _run_help_subcommand(argv: Sequence[str]) -> int:
     if not argv:
         build_parser().print_help()
         return 0
     name = argv[0]
-    if name not in _HELP_VALID_NAMES:
-        valid = ', '.join(_HELP_VALID_NAMES)
+    if name not in _SUBCOMMANDS:
+        valid = ', '.join(sorted(_SUBCOMMANDS))
         print(
-            f"error: unknown subcommand '{name}' (valid: {valid})",
+            f'error: unknown subcommand {name!r} (valid: {valid})',
             file=sys.stderr,
         )
         return 2
