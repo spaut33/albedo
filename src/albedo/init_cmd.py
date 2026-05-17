@@ -161,7 +161,7 @@ def seed_repo_manifest(target_dir: Path, *, force: bool = False) -> Path:
     return target
 
 
-def init_main(argv: Sequence[str] | None = None) -> int:
+def _build_init_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='albedo init',
         description='Seed $ALBEDO_HOME with config, .env, prompts, mcp-servers.json.',
@@ -171,7 +171,11 @@ def init_main(argv: Sequence[str] | None = None) -> int:
         action='store_true',
         help='Overwrite files that already exist in $ALBEDO_HOME.',
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def init_main(argv: Sequence[str] | None = None) -> int:
+    args = _build_init_parser().parse_args(argv)
 
     home = seed_global_home(force=args.force)
     print(f'albedo home: {home}', file=sys.stderr)
@@ -183,7 +187,7 @@ def init_main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def init_repo_main(argv: Sequence[str] | None = None) -> int:
+def _build_init_repo_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='albedo init-repo',
         description='Write a `.albedo.yaml` skeleton in the current directory.',
@@ -193,7 +197,11 @@ def init_repo_main(argv: Sequence[str] | None = None) -> int:
         action='store_true',
         help='Overwrite an existing .albedo.yaml.',
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def init_repo_main(argv: Sequence[str] | None = None) -> int:
+    args = _build_init_repo_parser().parse_args(argv)
 
     target = seed_repo_manifest(Path.cwd(), force=args.force)
     print(

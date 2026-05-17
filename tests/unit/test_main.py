@@ -27,6 +27,51 @@ def test_version_flag_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
     assert __version__ in captured.out
 
 
+def test_help_subcommand_prints_top_level_help(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(['help'])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert 'albedo' in captured.out
+    assert 'Subcommands:' in captured.out
+    assert captured.err == ''
+
+
+def test_help_subcommand_with_name_prints_subcommand_help(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(['help', 'setup'])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert 'albedo setup' in captured.out
+
+
+@pytest.mark.parametrize(
+    'name', ['run', 'setup', 'preflight', 'init', 'init-repo', 'help']
+)
+def test_help_subcommand_covers_each_subcommand(
+    capsys: pytest.CaptureFixture[str],
+    name: str,
+) -> None:
+    exit_code = main(['help', name])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    expected_prog = 'albedo' if name in {'run', 'help'} else f'albedo {name}'
+    assert expected_prog in out
+
+
+def test_help_subcommand_unknown_name_returns_2(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(['help', 'bogus'])
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert 'bogus' in captured.err
+    assert 'run' in captured.err and 'setup' in captured.err
+    assert 'Subcommands:' not in captured.out
+
+
 def test_unknown_argument_exits_with_error() -> None:
     with pytest.raises(SystemExit) as exc:
         main(['--no-such-flag'])
